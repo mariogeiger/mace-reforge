@@ -6,16 +6,22 @@ use wasm_bindgen::JsCast;
 use crate::api::*;
 use crate::shapes::shape_svg;
 
+// ── Geometry ────────────────────────────────────────────────────────
+
+/// Answers and vote avatars sit at this % of circle-element width from center.
+const R: f64 = 43.0;
+/// Labels sit slightly further out.
+const LABEL_R: f64 = 52.0;
+/// Pixel radius for avatar hit-testing on pointer down.
+const HIT_PX: f64 = 24.0;
+
 fn answer_angle(i: usize, n: usize) -> f64 {
     -FRAC_PI_2 + TAU * (i as f64) / (n as f64)
 }
 
 fn angular_distance(a: f64, b: f64) -> f64 {
-    let mut d = (a - b).abs();
-    if d > PI {
-        d = TAU - d;
-    }
-    d
+    let d = (a - b).abs();
+    if d > PI { TAU - d } else { d }
 }
 
 fn insertion_index(click_angle: f64, n: usize) -> usize {
@@ -23,9 +29,75 @@ fn insertion_index(click_angle: f64, n: usize) -> usize {
         return 0;
     }
     let phi = (click_angle + FRAC_PI_2).rem_euclid(TAU);
-    let f = phi * n as f64 / TAU;
-    (f.ceil() as usize).min(n)
+    ((phi * n as f64 / TAU).ceil() as usize).min(n)
 }
+
+/// (center_x_px, center_y_px, scale_px) where scale converts +-1 normalised coords to pixels.
+fn circle_metrics(el: &web_sys::Element) -> (f64, f64, f64) {
+    let r = el.get_bounding_client_rect();
+    (
+        r.left() + r.width() / 2.0,
+        r.top() + r.height() / 2.0,
+        r.width() * R / 100.0,
+    )
+}
+
+/// Client pixel coords -> normalised circle coords, clamped to the unit disc.
+fn to_normalised(px: f64, py: f64, el: &web_sys::Element) -> (f64, f64) {
+    let (cx, cy, s) = circle_metrics(el);
+    let (mut nx, mut ny) = ((px - cx) / s, (py - cy) / s);
+    let d = (nx * nx + ny * ny).sqrt();
+    if d > 1.0 {
+        nx /= d;
+        ny /= d;
+    }
+    (nx, ny)
+}
+
+// ── Opinion text (Ben Jonson voice) ─────────────────────────────────
+
+const BANDS: &[(f64, &str)] = &[
+    (0.12, ""),
+    (0.35, "My inclination tends towards {}"),
+    (0.65, "I find myself persuaded by {}"),
+    (1.01, "With settled conviction, I hold firmly with {}"),
+];
+
+fn opinion(q: &Question, x: f64, y: f64) -> String {
+    let n = q.answers.len();
+    if n == 0 {
+        return "The circle stands empty, a stage awaiting its players. \
+                Pray, touch it, and set forth a position."
+            .into();
+    }
+    if n == 1 {
+        return "A solitary voice echoes \u{2014} yet true discourse \
+                demands a partner. Touch the circle once more."
+            .into();
+    }
+
+    let dist = (x * x + y * y).sqrt();
+    let band = BANDS.iter().find(|(max, _)| dist < *max).unwrap();
+    if band.1.is_empty() {
+        return "I remain unswayed, holding no fixed position in this matter.".into();
+    }
+
+    let angle = y.atan2(x);
+    let mut scored: Vec<(usize, f64)> = (0..n)
+        .map(|i| (i, angular_distance(angle, answer_angle(i, n))))
+        .collect();
+    scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    let closest = &q.answers[scored[0].0];
+
+    if n >= 2 && dist > 0.25 && scored[0].1 / scored[1].1.max(0.001) > 0.7 {
+        let second = &q.answers[scored[1].0];
+        return format!("My judgement hangs divided betwixt {closest} and {second}.");
+    }
+
+    format!("{}.", band.1.replace("{}", closest))
+}
+
+// ── Component ───────────────────────────────────────────────────────
 
 #[component]
 pub fn ClosedQuestionPage(
@@ -40,7 +112,8 @@ pub fn ClosedQuestionPage(
     let (did_drag, set_did_drag) = signal(false);
     let (all_users, set_all_users) = signal(Vec::<User>::new());
 
-    // Load users for avatar rendering
+    // ── Effects ─────────────────────────────────────────────────────
+
     Effect::new(move || {
         let _ = question.get();
         wasm_bindgen_futures::spawn_local(async move {
@@ -50,11 +123,8 @@ pub fn ClosedQuestionPage(
         });
     });
 
-    // Initialize knob position from existing vote
     Effect::new(move || {
-        let user = current_user.get();
-        let q = question.get_untracked();
-        if let (Some(u), Some(q)) = (user, q) {
+        if let (Some(u), Some(q)) = (current_user.get(), question.get_untracked()) {
             if let Some(v) = q.votes.iter().find(|v| v.user_name == u.name) {
                 set_knob_x.set(v.x);
                 set_knob_y.set(v.y);
@@ -65,64 +135,10 @@ pub fn ClosedQuestionPage(
         }
     });
 
+    // ── Derived state ───────────────────────────────────────────────
+
     let num_answers = Memo::new(move |_| {
         question.get().map(|q| q.answers.len()).unwrap_or(0)
-    });
-
-    // Opinion text — in the manner of Ben Jonson
-    const BANDS: &[(f64, &str)] = &[
-        (0.12, ""),
-        (0.35, "My inclination tends towards {}"),
-        (0.65, "I find myself persuaded by {}"),
-        (1.01, "With settled conviction, I hold firmly with {}"),
-    ];
-
-    let opinion_text = Memo::new(move |_| {
-        let q = question.get();
-        let Some(q) = q.as_ref() else {
-            return String::new();
-        };
-        let n = q.answers.len();
-
-        if n == 0 {
-            return "\u{2022} The circle stands empty, a stage awaiting its players. \
-                    Pray, touch it, and set forth a position."
-                .to_string();
-        }
-        if n == 1 {
-            return "\u{2022} A solitary voice echoes \u{2014} yet true discourse \
-                    demands a partner. Touch the circle once more."
-                .to_string();
-        }
-
-        let x = knob_x.get();
-        let y = knob_y.get();
-        let dist = (x * x + y * y).sqrt();
-
-        let band = BANDS.iter().find(|(max, _)| dist < *max).unwrap();
-        if band.1.is_empty() {
-            return "I remain unswayed, holding no fixed position in this matter.".to_string();
-        }
-
-        let angle = y.atan2(x);
-        let mut scored: Vec<(usize, f64)> = (0..n)
-            .map(|i| (i, angular_distance(angle, answer_angle(i, n))))
-            .collect();
-        scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-
-        let closest = &q.answers[scored[0].0];
-
-        if n >= 2 && dist > 0.25 {
-            let ratio = scored[0].1 / scored[1].1.max(0.001);
-            if ratio > 0.7 {
-                let second = &q.answers[scored[1].0];
-                return format!(
-                    "My judgement hangs divided betwixt {closest} and {second}."
-                );
-            }
-        }
-
-        format!("{}.", band.1.replace("{}", closest))
     });
 
     let qid = Memo::new(move |_| {
@@ -132,96 +148,109 @@ pub fn ClosedQuestionPage(
             .unwrap_or_default()
     });
 
-    // Debounced vote save
-    let vote_debounce = std::cell::Cell::new(0i32);
+    let opinion_text = Memo::new(move |_| {
+        question
+            .get()
+            .map(|q| opinion(&q, knob_x.get(), knob_y.get()))
+            .unwrap_or_default()
+    });
+
+    // ── Debounced vote save ─────────────────────────────────────────
+
+    let vote_timer = std::cell::Cell::new(0i32);
     let tid_vote = topic_id.clone();
     let save_vote = move || {
-        let prev = vote_debounce.get();
+        let prev = vote_timer.get();
         if prev != 0 {
             web_sys::window().unwrap().clear_timeout_with_handle(prev);
         }
         let tid = tid_vote.clone();
         let cb = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
-            let Some(user) = current_user.get_untracked() else { return };
-            let x = knob_x.get_untracked();
-            let y = knob_y.get_untracked();
-            let tid = tid.clone();
-            let qid = qid.get_untracked();
+            let Some(user) = current_user.get_untracked() else {
+                return;
+            };
+            let (tid, qid) = (tid.clone(), qid.get_untracked());
+            let (x, y) = (knob_x.get_untracked(), knob_y.get_untracked());
             wasm_bindgen_futures::spawn_local(async move {
                 match api_post::<Question>(
                     &format!("/api/topics/{tid}/questions/{qid}/votes"),
-                    &CastVote { user_name: user.name, x, y },
-                ).await {
+                    &CastVote {
+                        user_name: user.name,
+                        x,
+                        y,
+                    },
+                )
+                .await
+                {
                     Ok(q) => set_question.set(Some(q)),
                     Err(e) => log!("[cast_vote] {e}"),
                 }
             });
         });
-        let handle = web_sys::window().unwrap()
+        let h = web_sys::window()
+            .unwrap()
             .set_timeout_with_callback_and_timeout_and_arguments_0(
-                cb.as_ref().unchecked_ref(), 300
-            ).unwrap_or(0);
+                cb.as_ref().unchecked_ref(),
+                300,
+            )
+            .unwrap_or(0);
         cb.forget();
-        vote_debounce.set(handle);
+        vote_timer.set(h);
     };
 
-    // Drag: mousemove on the circle sets avatar to mouse position, clamped to radius.
-    let save_vote_up = save_vote.clone();
-    let on_circle_mousemove = move |ev: web_sys::MouseEvent| {
-        if !dragging.get_untracked() { return; }
-        set_did_drag.set(true);
-        let circle: web_sys::Element = ev.current_target().unwrap().unchecked_into();
-        let rect = circle.get_bounding_client_rect();
-        let cx = rect.left() + rect.width() / 2.0;
-        let cy = rect.top() + rect.height() / 2.0;
-        let display_radius = rect.width() / 2.0 * 0.43;
-        let mut nx = (ev.client_x() as f64 - cx) / display_radius;
-        let mut ny = (ev.client_y() as f64 - cy) / display_radius;
-        let dist = (nx * nx + ny * ny).sqrt();
-        if dist > 1.0 { nx /= dist; ny /= dist; }
+    // ── Pointer events (unified mouse + touch via setPointerCapture) ─
+
+    let on_pointerdown = move |ev: web_sys::PointerEvent| {
+        if current_user.get_untracked().is_none() {
+            return;
+        }
+        let el: web_sys::Element = ev.current_target().unwrap().unchecked_into();
+        let (cx, cy, s) = circle_metrics(&el);
+        let dx = ev.client_x() as f64 - (cx + knob_x.get_untracked() * s);
+        let dy = ev.client_y() as f64 - (cy + knob_y.get_untracked() * s);
+        if (dx * dx + dy * dy).sqrt() < HIT_PX {
+            ev.prevent_default();
+            let _ = el.set_pointer_capture(ev.pointer_id());
+            set_dragging.set(true);
+            set_did_drag.set(true);
+        }
+    };
+
+    let on_pointermove = move |ev: web_sys::PointerEvent| {
+        if !dragging.get_untracked() {
+            return;
+        }
+        let el: web_sys::Element = ev.current_target().unwrap().unchecked_into();
+        let (nx, ny) = to_normalised(ev.client_x() as f64, ev.client_y() as f64, &el);
         set_knob_x.set(nx);
         set_knob_y.set(ny);
     };
 
-    let on_circle_mousedown = move |ev: web_sys::MouseEvent| {
-        ev.prevent_default();
-        set_dragging.set(true);
-        set_did_drag.set(false);
-    };
-
-    let on_circle_mouseup = move |_ev: web_sys::MouseEvent| {
-        if dragging.get_untracked() {
-            set_dragging.set(false);
-            save_vote_up();
+    let on_pointerup = move |ev: web_sys::PointerEvent| {
+        if !dragging.get_untracked() {
+            return;
         }
+        set_dragging.set(false);
+        let el: web_sys::Element = ev.current_target().unwrap().unchecked_into();
+        let _ = el.release_pointer_capture(ev.pointer_id());
+        save_vote();
     };
 
-    let on_circle_mouseleave = move |_ev: web_sys::MouseEvent| {
-        if dragging.get_untracked() {
-            set_dragging.set(false);
-            save_vote.clone()();
-        }
-    };
-
-    // Click on circle → add answer (only if not dragging)
+    // Click on empty circle -> add answer
     let tid_add = topic_id.clone();
-    let on_circle_click = move |ev: web_sys::MouseEvent| {
+    let on_click = move |ev: web_sys::MouseEvent| {
         if did_drag.get_untracked() {
             set_did_drag.set(false);
             return;
         }
+        let el: web_sys::Element = ev.current_target().unwrap().unchecked_into();
+        let r = el.get_bounding_client_rect();
+        let angle = (ev.client_y() as f64 - r.top() - r.height() / 2.0)
+            .atan2(ev.client_x() as f64 - r.left() - r.width() / 2.0);
+        let idx = insertion_index(angle, num_answers.get_untracked());
 
-        let circle_el = ev.current_target().unwrap();
-        let circle: &web_sys::Element = circle_el.unchecked_ref();
-        let rect = circle.get_bounding_client_rect();
-        let cx = rect.left() + rect.width() / 2.0;
-        let cy = rect.top() + rect.height() / 2.0;
-        let click_angle = (ev.client_y() as f64 - cy).atan2(ev.client_x() as f64 - cx);
-        let n = num_answers.get_untracked();
-        let index = insertion_index(click_angle, n);
-
-        let window = web_sys::window().unwrap();
-        let text = window
+        let text = web_sys::window()
+            .unwrap()
             .prompt_with_message("What position shall here be voiced?")
             .ok()
             .flatten()
@@ -235,7 +264,7 @@ pub fn ClosedQuestionPage(
         wasm_bindgen_futures::spawn_local(async move {
             match api_post::<Question>(
                 &format!("/api/topics/{tid}/questions/{qid}/answers"),
-                &AddAnswer { text, index },
+                &AddAnswer { text, index: idx },
             )
             .await
             {
@@ -245,92 +274,70 @@ pub fn ClosedQuestionPage(
         });
     };
 
+    // ── View ────────────────────────────────────────────────────────
+
     let tid2 = topic_id.clone();
 
     view! {
         <div class="page question-page">
             <a href=format!("#/topic/{tid2}") class="back-link">"Return to questions"</a>
             <h2 class="question-title">{move || question.get().map(|q| q.text).unwrap_or_default()}</h2>
-
             <div class="opinion-text">{opinion_text}</div>
 
             <div class="vote-circle-container">
-                <div
-                    class="vote-circle"
-                    on:click=on_circle_click
-                    on:mousedown=on_circle_mousedown
-                    on:mousemove=on_circle_mousemove
-                    on:mouseup=on_circle_mouseup
-                    on:mouseleave=on_circle_mouseleave
+                <div class="vote-circle"
+                    on:click=on_click
+                    on:pointerdown=on_pointerdown
+                    on:pointermove=on_pointermove
+                    on:pointerup=on_pointerup
                 >
+                    // Answer dots and labels
                     {move || {
-                        let q = question.get();
-                        let Some(q) = q.as_ref() else { return Vec::new() };
+                        let Some(q) = question.get() else { return Vec::new() };
                         let n = q.answers.len();
-                        q.answers.iter().enumerate().map(|(i, answer)| {
-                            let angle = answer_angle(i, n);
-                            let label_r = 52.0;
-                            let lx = 50.0 + label_r * angle.cos();
-                            let ly = 50.0 + label_r * angle.sin();
-                            let dot_r = 43.0;
-                            let dx = 50.0 + dot_r * angle.cos();
-                            let dy = 50.0 + dot_r * angle.sin();
+                        q.answers.iter().enumerate().map(|(i, ans)| {
+                            let a = answer_angle(i, n);
+                            let (dx, dy) = (50.0 + R * a.cos(), 50.0 + R * a.sin());
+                            let (lx, ly) = (50.0 + LABEL_R * a.cos(), 50.0 + LABEL_R * a.sin());
                             view! {
-                                <div
-                                    class="answer-dot"
-                                    style:left=format!("{dx}%")
-                                    style:top=format!("{dy}%")
-                                />
-                                <div
-                                    class="answer-label"
-                                    style:left=format!("{lx}%")
-                                    style:top=format!("{ly}%")
-                                >
-                                    {answer.clone()}
+                                <div class="answer-dot"
+                                    style:left=format!("{dx}%") style:top=format!("{dy}%") />
+                                <div class="answer-label"
+                                    style:left=format!("{lx}%") style:top=format!("{ly}%")>
+                                    {ans.clone()}
                                 </div>
                             }
                         }).collect::<Vec<_>>()
                     }}
 
-                    // Other users' vote avatars
+                    // Other users' avatars
                     {move || {
-                        let q = question.get();
-                        let Some(q) = q.as_ref() else { return Vec::new() };
-                        let my_name = current_user.get().map(|u| u.name).unwrap_or_default();
-                        q.votes.iter().filter(|v| v.user_name != my_name).map(|vote| {
-                            let user = all_users.get().into_iter().find(|u| u.name == vote.user_name);
-                            let (shape, color) = user
+                        let Some(q) = question.get() else { return Vec::new() };
+                        let me = current_user.get().map(|u| u.name).unwrap_or_default();
+                        q.votes.iter().filter(|v| v.user_name != me).map(|v| {
+                            let (shape, color) = all_users.get().into_iter()
+                                .find(|u| u.name == v.user_name)
                                 .map(|u| (u.shape, u.color))
-                                .unwrap_or((Shape::Circle, "#808080".to_string()));
-                            let lx = 50.0 + vote.x * 43.0;
-                            let ly = 50.0 + vote.y * 43.0;
-                            let name = vote.user_name.clone();
+                                .unwrap_or((Shape::Circle, "#808080".into()));
                             view! {
-                                <div
-                                    class="vote-avatar"
-                                    style:left=format!("{lx}%")
-                                    style:top=format!("{ly}%")
-                                    title=name
-                                >
+                                <div class="vote-avatar"
+                                    style:left=format!("{}%", 50.0 + v.x * R)
+                                    style:top=format!("{}%", 50.0 + v.y * R)
+                                    title=v.user_name.clone()>
                                     {shape_svg(shape, color, 26.0)}
                                 </div>
                             }
                         }).collect::<Vec<_>>()
                     }}
 
-                    // Current user's avatar (on top, with border)
+                    // Current user's draggable avatar
                     {move || {
-                        let user = current_user.get();
-                        let Some(u) = user else { return None };
-                        let lx = 50.0 + knob_x.get() * 43.0;
-                        let ly = 50.0 + knob_y.get() * 43.0;
+                        let u = current_user.get()?;
                         Some(view! {
-                            <div
-                                class="vote-avatar vote-avatar-me"
+                            <div class="vote-avatar vote-avatar-me"
                                 class:dragging=dragging
-                                style:left=format!("{lx}%")
-                                style:top=format!("{ly}%")
-                            >
+                                style:left=format!("{}%", 50.0 + knob_x.get() * R)
+                                style:top=format!("{}%", 50.0 + knob_y.get() * R)>
                                 {shape_svg(u.shape, u.color, 32.0)}
                             </div>
                         })
