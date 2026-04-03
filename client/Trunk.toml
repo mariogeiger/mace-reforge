@@ -4,3 +4,7 @@ port = 8081
 [[proxy]]
 rewrite = "/api/"
 backend = "http://localhost:4849/api/"
+
+[[proxy]]
+rewrite = "/embedding/"
+backend = "http://localhost:4850/"

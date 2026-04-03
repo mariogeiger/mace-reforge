@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Topic {
-    pub id: String,
-    pub title: String,
+// ── Question types ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub enum QuestionKind {
+    #[default]
+    Closed,
+    Open,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,8 +14,58 @@ pub struct Question {
     pub id: String,
     pub topic_id: String,
     pub text: String,
+    #[serde(default)]
+    pub kind: QuestionKind,
+    /// Closed question: fixed answer positions around a circle
+    #[serde(default)]
     pub answers: Vec<String>,
+    /// Open question: free-text answers
+    #[serde(default)]
+    pub open_answers: Vec<OpenAnswer>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAnswer {
+    pub user_name: String,
+    pub text: String,
+}
+
+// ── Topics ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Topic {
+    pub id: String,
+    pub title: String,
+}
+
+/// Topic with computed question count, returned by API
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopicWithCount {
+    pub id: String,
+    pub title: String,
+    pub question_count: usize,
+}
+
+// ── Users ───────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum Shape {
+    Circle,
+    Square,
+    Triangle,
+    Diamond,
+    Star,
+    Hexagon,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct User {
+    pub name: String,
+    pub shape: Shape,
+    pub color: String,
+}
+
+// ── API request/response types ──────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTopic {
@@ -22,6 +75,8 @@ pub struct CreateTopic {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateQuestion {
     pub text: String,
+    #[serde(default)]
+    pub kind: QuestionKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,10 +85,21 @@ pub struct AddAnswer {
     pub index: usize,
 }
 
-/// Topic with computed question count, returned by API
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TopicWithCount {
-    pub id: String,
-    pub title: String,
-    pub question_count: usize,
+pub struct AddOpenAnswer {
+    pub user_name: String,
+    pub text: String,
+}
+
+/// 2D positions for open question answers, returned by the server
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanePositions {
+    pub points: Vec<PlanePoint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanePoint {
+    pub user_name: String,
+    pub x: f64,
+    pub y: f64,
 }

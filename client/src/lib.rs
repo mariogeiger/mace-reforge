@@ -55,7 +55,134 @@ async fn api_post<T: serde::de::DeserializeOwned>(
     serde_json::from_value(json).map_err(|e| e.to_string())
 }
 
-// ── Routing ──────────────────────────────────────────────────────────
+// ── Local storage helpers ───────────────────────────────────────────
+
+fn storage() -> web_sys::Storage {
+    web_sys::window()
+        .unwrap()
+        .local_storage()
+        .unwrap()
+        .unwrap()
+}
+
+fn load_local_user() -> Option<User> {
+    let s = storage().get_item("user").ok()??;
+    serde_json::from_str(&s).ok()
+}
+
+fn save_local_user(user: &User) {
+    let json = serde_json::to_string(user).unwrap();
+    storage().set_item("user", &json).ok();
+}
+
+// ── Shapes: SVG rendering ───────────────────────────────────────────
+
+const ALL_SHAPES: &[Shape] = &[
+    Shape::Circle,
+    Shape::Square,
+    Shape::Triangle,
+    Shape::Diamond,
+    Shape::Star,
+    Shape::Hexagon,
+];
+
+const PALETTE: &[&str] = &[
+    "#c0392b", "#e67e22", "#f1c40f", "#27ae60", "#2980b9", "#8e44ad", "#e84393", "#2d3436",
+];
+
+fn shape_svg(shape: Shape, color: String, size: f64) -> impl IntoView {
+    let s = size;
+    let half = s / 2.0;
+    let vb = format!("0 0 {s} {s}");
+    let inner = match &shape {
+        Shape::Circle => format!(
+            r#"<circle cx="{half}" cy="{half}" r="{}" fill="{color}"/>"#,
+            half * 0.85
+        ),
+        Shape::Square => {
+            let inset = s * 0.12;
+            let side = s - inset * 2.0;
+            format!(
+                r#"<rect x="{inset}" y="{inset}" width="{side}" height="{side}" rx="{}" fill="{color}"/>"#,
+                s * 0.08
+            )
+        }
+        Shape::Triangle => {
+            let top = s * 0.1;
+            let bot = s * 0.9;
+            format!(
+                r#"<polygon points="{half},{top} {bot},{bot} {top},{bot}" fill="{color}"/>"#
+            )
+        }
+        Shape::Diamond => {
+            let m = s * 0.08;
+            let e = s - m;
+            format!(
+                r#"<polygon points="{half},{m} {e},{half} {half},{e} {m},{half}" fill="{color}"/>"#
+            )
+        }
+        Shape::Star => {
+            let cx = half;
+            let cy = half;
+            let ro = half * 0.9;
+            let ri = half * 0.35;
+            let mut pts = String::new();
+            for i in 0..10 {
+                let angle =
+                    std::f64::consts::FRAC_PI_2 * -1.0 + std::f64::consts::PI * i as f64 / 5.0;
+                let r = if i % 2 == 0 { ro } else { ri };
+                if !pts.is_empty() {
+                    pts.push(' ');
+                }
+                pts.push_str(&format!(
+                    "{:.1},{:.1}",
+                    cx + r * angle.cos(),
+                    cy + r * angle.sin()
+                ));
+            }
+            format!(r#"<polygon points="{pts}" fill="{color}"/>"#)
+        }
+        Shape::Hexagon => {
+            let cx = half;
+            let cy = half;
+            let r = half * 0.88;
+            let mut pts = String::new();
+            for i in 0..6 {
+                let angle = std::f64::consts::PI / 3.0 * i as f64 - std::f64::consts::FRAC_PI_2;
+                if !pts.is_empty() {
+                    pts.push(' ');
+                }
+                pts.push_str(&format!(
+                    "{:.1},{:.1}",
+                    cx + r * angle.cos(),
+                    cy + r * angle.sin()
+                ));
+            }
+            format!(r#"<polygon points="{pts}" fill="{color}"/>"#)
+        }
+    };
+
+    view! {
+        <svg
+            viewBox=vb
+            xmlns="http://www.w3.org/2000/svg"
+            inner_html=inner
+        />
+    }
+}
+
+fn shape_name(shape: &Shape) -> &'static str {
+    match shape {
+        Shape::Circle => "Circle",
+        Shape::Square => "Square",
+        Shape::Triangle => "Triangle",
+        Shape::Diamond => "Diamond",
+        Shape::Star => "Star",
+        Shape::Hexagon => "Hexagon",
+    }
+}
+
+// ── Routing ─────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, PartialEq)]
 enum Route {
@@ -92,7 +219,7 @@ fn Star(class_name: &'static str) -> impl IntoView {
     }
 }
 
-// ── Entry ────────────────────────────────────────────────────────────
+// ── Entry ───────────────────────────────────────────────────────────
 
 #[wasm_bindgen(start)]
 pub fn main() {
@@ -103,6 +230,7 @@ pub fn main() {
 #[component]
 fn App() -> impl IntoView {
     let (route, set_route) = signal(parse_hash());
+    let (current_user, set_current_user) = signal(load_local_user());
 
     // Listen for hashchange
     Effect::new(move || {
@@ -124,18 +252,187 @@ fn App() -> impl IntoView {
                 </svg>
                 <span class="logo-text">"MACE-REFORGE"</span>
             </a>
+            <UserBadge user=current_user set_user=set_current_user/>
         </header>
         <main>
             {move || match route.get() {
                 Route::Home => view! { <HomePage/> }.into_any(),
                 Route::Topic(id) => view! { <TopicPage topic_id=id/> }.into_any(),
-                Route::Question(tid, qid) => view! { <QuestionPage topic_id=tid question_id=qid/> }.into_any(),
+                Route::Question(tid, qid) => view! { <QuestionPage topic_id=tid question_id=qid current_user=current_user/> }.into_any(),
             }}
         </main>
     }
 }
 
-// ── Home Page: Topic Grid ────────────────────────────────────────────
+// ── User Badge (header) ─────────────────────────────────────────────
+
+#[component]
+fn UserBadge(
+    user: ReadSignal<Option<User>>,
+    set_user: WriteSignal<Option<User>>,
+) -> impl IntoView {
+    let (editing, set_editing) = signal(false);
+    let (name_input, set_name_input) = signal(String::new());
+    let (selected_shape, set_selected_shape) = signal(Shape::Circle);
+    let (selected_color, set_selected_color) = signal(PALETTE[0].to_string());
+    let (known_users, set_known_users) = signal(Vec::<User>::new());
+    let (suggestions, set_suggestions) = signal(Vec::<User>::new());
+
+    // Load known users when editing starts
+    let load_users = move || {
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok(users) = api_get::<Vec<User>>("/api/users").await {
+                set_known_users.set(users);
+            }
+        });
+    };
+
+    let open_editor = move |_: web_sys::MouseEvent| {
+        if let Some(u) = user.get_untracked() {
+            set_name_input.set(u.name);
+            set_selected_shape.set(u.shape);
+            set_selected_color.set(u.color);
+        }
+        load_users();
+        set_editing.set(true);
+    };
+
+    let save_user = move || {
+        let name = name_input.get_untracked();
+        if name.trim().is_empty() {
+            return;
+        }
+        let new_user = User {
+            name: name.trim().to_string(),
+            shape: selected_shape.get_untracked(),
+            color: selected_color.get_untracked(),
+        };
+        save_local_user(&new_user);
+        set_user.set(Some(new_user.clone()));
+        set_editing.set(false);
+        wasm_bindgen_futures::spawn_local(async move {
+            api_post::<Vec<User>>("/api/users", &new_user).await.ok();
+        });
+    };
+
+    let on_name_input = move |ev: web_sys::Event| {
+        let val = event_target_value(&ev);
+        set_name_input.set(val.clone());
+        let val_lower = val.to_lowercase();
+        let filtered: Vec<User> = known_users
+            .get_untracked()
+            .into_iter()
+            .filter(|u| !val_lower.is_empty() && u.name.to_lowercase().contains(&val_lower))
+            .collect();
+        set_suggestions.set(filtered);
+    };
+
+    let select_suggestion = move |u: User| {
+        set_name_input.set(u.name.clone());
+        set_selected_shape.set(u.shape.clone());
+        set_selected_color.set(u.color.clone());
+        set_suggestions.set(vec![]);
+    };
+
+    view! {
+        <div class="user-badge-area">
+            <Show
+                when=move || !editing.get()
+                fallback=move || {
+                    let save = save_user.clone();
+                    view! {
+                        <div class="user-editor">
+                            <div class="user-editor-name">
+                                <input
+                                    type="text"
+                                    placeholder="Thy name..."
+                                    prop:value=name_input
+                                    on:input=on_name_input
+                                    on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                        if ev.key() == "Enter" { save_user(); }
+                                        if ev.key() == "Escape" { set_editing.set(false); }
+                                    }
+                                />
+                                <Show when=move || !suggestions.get().is_empty()>
+                                    <div class="user-suggestions">
+                                        <For
+                                            each=move || suggestions.get()
+                                            key=|u| u.name.clone()
+                                            let:u
+                                        >
+                                            {
+                                                let uc = u.clone();
+                                                let uc2 = u.clone();
+                                                view! {
+                                                    <div class="user-suggestion" on:mousedown=move |_| select_suggestion(uc.clone())>
+                                                        <span class="suggestion-avatar">{shape_svg(uc2.shape.clone(), uc2.color.clone(), 20.0)}</span>
+                                                        <span>{u.name.clone()}</span>
+                                                    </div>
+                                                }
+                                            }
+                                        </For>
+                                    </div>
+                                </Show>
+                            </div>
+                            <div class="shape-picker">
+                                {ALL_SHAPES.iter().map(|s| {
+                                    let for_selected = s.clone();
+                                    let for_click = s.clone();
+                                    let for_svg = s.clone();
+                                    view! {
+                                        <button
+                                            class="shape-option"
+                                            class:selected=move || selected_shape.get() == for_selected
+                                            title=shape_name(s)
+                                            on:click=move |_| set_selected_shape.set(for_click.clone())
+                                        >
+                                            {shape_svg(for_svg, selected_color.get(), 24.0)}
+                                        </button>
+                                    }
+                                }).collect::<Vec<_>>()}
+                            </div>
+                            <div class="color-picker">
+                                {PALETTE.iter().map(|c| {
+                                    let c = c.to_string();
+                                    let c2 = c.clone();
+                                    let c3 = c.clone();
+                                    view! {
+                                        <button
+                                            class="color-option"
+                                            class:selected=move || selected_color.get() == c
+                                            style:background=c2.clone()
+                                            on:click=move |_| set_selected_color.set(c3.clone())
+                                        />
+                                    }
+                                }).collect::<Vec<_>>()}
+                            </div>
+                            <button class="user-save-btn" on:click=move |_| save()>"Enter"</button>
+                        </div>
+                    }
+                }
+            >
+                {move || {
+                    if let Some(u) = user.get() {
+                        view! {
+                            <button class="user-badge" on:click=open_editor>
+                                <span class="badge-avatar">{shape_svg(u.shape.clone(), u.color.clone(), 28.0)}</span>
+                                <span class="badge-name">{u.name}</span>
+                            </button>
+                        }.into_any()
+                    } else {
+                        view! {
+                            <button class="user-badge user-badge-empty" on:click=open_editor>
+                                "Set thy identity"
+                            </button>
+                        }.into_any()
+                    }
+                }}
+            </Show>
+        </div>
+    }
+}
+
+// ── Home Page: Topic Grid ───────────────────────────────────────────
 
 #[component]
 fn HomePage() -> impl IntoView {
@@ -143,7 +440,6 @@ fn HomePage() -> impl IntoView {
     let (new_title, set_new_title) = signal(String::new());
     let (error, set_error) = signal(Option::<String>::None);
 
-    // Load topics
     Effect::new(move || {
         wasm_bindgen_futures::spawn_local(async move {
             match api_get::<Vec<TopicWithCount>>("/api/topics").await {
@@ -216,13 +512,14 @@ fn HomePage() -> impl IntoView {
     }
 }
 
-// ── Topic Page: Questions List ───────────────────────────────────────
+// ── Topic Page: Questions List ──────────────────────────────────────
 
 #[component]
 fn TopicPage(topic_id: String) -> impl IntoView {
     let (topic, set_topic) = signal(Option::<TopicWithCount>::None);
     let (questions, set_questions) = signal(Vec::<Question>::new());
     let (new_text, set_new_text) = signal(String::new());
+    let (new_kind, set_new_kind) = signal(QuestionKind::Closed);
 
     let tid = topic_id.clone();
     Effect::new(move || {
@@ -245,8 +542,14 @@ fn TopicPage(topic_id: String) -> impl IntoView {
         }
         set_new_text.set(String::new());
         let tid = tid2.clone();
+        let kind = new_kind.get_untracked();
         wasm_bindgen_futures::spawn_local(async move {
-            match api_post::<Question>(&format!("/api/topics/{tid}/questions"), &CreateQuestion { text }).await {
+            match api_post::<Question>(
+                &format!("/api/topics/{tid}/questions"),
+                &CreateQuestion { text, kind },
+            )
+            .await
+            {
                 Ok(q) => set_questions.update(|qs| qs.push(q)),
                 Err(e) => log!("[create_question] {e}"),
             }
@@ -278,6 +581,18 @@ fn TopicPage(topic_id: String) -> impl IntoView {
                     on:input=move |ev| set_new_text.set(event_target_value(&ev))
                     on:keydown=on_keydown
                 />
+                <div class="kind-toggle">
+                    <button
+                        class="kind-btn"
+                        class:active=move || new_kind.get() == QuestionKind::Closed
+                        on:click=move |_| set_new_kind.set(QuestionKind::Closed)
+                    >"Closed"</button>
+                    <button
+                        class="kind-btn"
+                        class:active=move || new_kind.get() == QuestionKind::Open
+                        on:click=move |_| set_new_kind.set(QuestionKind::Open)
+                    >"Open"</button>
+                </div>
                 <button on:click=on_click>"Propose"</button>
             </div>
             <div class="question-list">
@@ -289,16 +604,21 @@ fn TopicPage(topic_id: String) -> impl IntoView {
                     {
                         let tid = tid3.clone();
                         let qid = question.id.clone();
-                        let n = question.answers.len();
+                        let is_open = question.kind == QuestionKind::Open;
+                        let n = if is_open { question.open_answers.len() } else { question.answers.len() };
                         let subtitle = if n == 0 {
                             "yet unvoiced".to_string()
                         } else {
                             format!("{n} positions voiced")
                         };
+                        let kind_label = if is_open { "open" } else { "closed" };
                         view! {
                             <a class="question-card" href=format!("#/topic/{tid}/question/{qid}")>
                                 <span class="question-text">{question.text}</span>
-                                <span class="answer-count">{subtitle}</span>
+                                <span class="question-meta">
+                                    <span class="kind-label">{kind_label}</span>
+                                    <span class="answer-count">{subtitle}</span>
+                                </span>
                             </a>
                         }
                     }
@@ -308,7 +628,64 @@ fn TopicPage(topic_id: String) -> impl IntoView {
     }
 }
 
-// ── Question Page: Voting Circle ─────────────────────────────────────
+// ── Question Page: dispatch by kind ─────────────────────────────────
+
+#[component]
+fn QuestionPage(
+    topic_id: String,
+    question_id: String,
+    current_user: ReadSignal<Option<User>>,
+) -> impl IntoView {
+    let (question, set_question) = signal(Option::<Question>::None);
+    let (kind, set_kind) = signal(Option::<QuestionKind>::None);
+
+    let tid = topic_id.clone();
+    let qid = question_id.clone();
+    Effect::new(move || {
+        let tid = tid.clone();
+        let qid = qid.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok(q) =
+                api_get::<Question>(&format!("/api/topics/{tid}/questions/{qid}")).await
+            {
+                set_kind.set(Some(q.kind.clone()));
+                set_question.set(Some(q));
+            }
+        });
+    });
+
+    let tid2 = topic_id.clone();
+    let qid2 = question_id.clone();
+
+    // Dispatch based on `kind` (set once), not `question` (updated on every submit)
+    view! {
+        {move || {
+            let Some(k) = kind.get() else {
+                return view! { <div class="page">"Loading..."</div> }.into_any();
+            };
+            match k {
+                QuestionKind::Closed => view! {
+                    <ClosedQuestionPage
+                        topic_id=tid2.clone()
+                        question=question
+                        set_question=set_question
+                    />
+                }.into_any(),
+                QuestionKind::Open => view! {
+                    <OpenQuestionPage
+                        topic_id=tid2.clone()
+                        question_id=qid2.clone()
+                        question=question
+                        set_question=set_question
+                        current_user=current_user
+                    />
+                }.into_any(),
+            }
+        }}
+    }
+}
+
+// ── Closed Question: Voting Circle ──────────────────────────────────
 
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
@@ -334,24 +711,15 @@ fn insertion_index(click_angle: f64, n: usize) -> usize {
 }
 
 #[component]
-fn QuestionPage(topic_id: String, question_id: String) -> impl IntoView {
-    let (question, set_question) = signal(Option::<Question>::None);
+fn ClosedQuestionPage(
+    topic_id: String,
+    question: ReadSignal<Option<Question>>,
+    set_question: WriteSignal<Option<Question>>,
+) -> impl IntoView {
     let (knob_x, set_knob_x) = signal(0.0_f64);
     let (knob_y, set_knob_y) = signal(0.0_f64);
     let (dragging, set_dragging) = signal(false);
     let (did_drag, set_did_drag) = signal(false);
-
-    let tid = topic_id.clone();
-    let qid = question_id.clone();
-    Effect::new(move || {
-        let tid = tid.clone();
-        let qid = qid.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            if let Ok(q) = api_get::<Question>(&format!("/api/topics/{tid}/questions/{qid}")).await {
-                set_question.set(Some(q));
-            }
-        });
-    });
 
     let num_answers = Memo::new(move |_| {
         question.get().map(|q| q.answers.len()).unwrap_or(0)
@@ -367,7 +735,9 @@ fn QuestionPage(topic_id: String, question_id: String) -> impl IntoView {
 
     let opinion_text = Memo::new(move |_| {
         let q = question.get();
-        let Some(q) = q.as_ref() else { return String::new() };
+        let Some(q) = q.as_ref() else {
+            return String::new();
+        };
         let n = q.answers.len();
 
         if n == 0 {
@@ -411,7 +781,6 @@ fn QuestionPage(topic_id: String, question_id: String) -> impl IntoView {
         format!("{}.", band.1.replace("{}", closest))
     });
 
-    // Knob drag — only on the knob element
     let on_knob_pointerdown = move |ev: web_sys::PointerEvent| {
         ev.stop_propagation();
         set_dragging.set(true);
@@ -428,10 +797,7 @@ fn QuestionPage(topic_id: String, question_id: String) -> impl IntoView {
         set_did_drag.set(true);
         let target = ev.current_target().unwrap();
         let el: web_sys::HtmlElement = target.unchecked_into();
-        let circle = el
-            .closest(".vote-circle")
-            .unwrap()
-            .unwrap();
+        let circle = el.closest(".vote-circle").unwrap().unwrap();
         let rect = circle.get_bounding_client_rect();
         let cx = rect.left() + rect.width() / 2.0;
         let cy = rect.top() + rect.height() / 2.0;
@@ -451,15 +817,18 @@ fn QuestionPage(topic_id: String, question_id: String) -> impl IntoView {
         set_dragging.set(false);
     };
 
-    // Click on circle → add answer
+    let qid = Memo::new(move |_| {
+        question
+            .get()
+            .map(|q| q.id.clone())
+            .unwrap_or_default()
+    });
     let tid_add = topic_id.clone();
-    let qid_add = question_id.clone();
     let on_circle_click = move |ev: web_sys::MouseEvent| {
         if did_drag.get_untracked() {
             set_did_drag.set(false);
             return;
         }
-        // Don't add if clicking on the knob
         let target = ev.target().unwrap();
         let el: &web_sys::Element = target.unchecked_ref();
         if el.class_list().contains("knob") {
@@ -486,14 +855,11 @@ fn QuestionPage(topic_id: String, question_id: String) -> impl IntoView {
         }
 
         let tid = tid_add.clone();
-        let qid = qid_add.clone();
+        let qid = qid.get_untracked();
         wasm_bindgen_futures::spawn_local(async move {
             match api_post::<Question>(
                 &format!("/api/topics/{tid}/questions/{qid}/answers"),
-                &AddAnswer {
-                    text,
-                    index,
-                },
+                &AddAnswer { text, index },
             )
             .await
             {
@@ -555,6 +921,213 @@ fn QuestionPage(topic_id: String, question_id: String) -> impl IntoView {
                         />
                     </Show>
                 </div>
+            </div>
+        </div>
+    }
+}
+
+// ── Open Question: 2D Plane ─────────────────────────────────────────
+
+#[component]
+fn OpenQuestionPage(
+    topic_id: String,
+    question_id: String,
+    question: ReadSignal<Option<Question>>,
+    set_question: WriteSignal<Option<Question>>,
+    current_user: ReadSignal<Option<User>>,
+) -> impl IntoView {
+    let (my_text, set_my_text) = signal(String::new());
+    let (token_count, set_token_count) = signal(Option::<usize>::None);
+    let (positions, set_positions) = signal(PlanePositions { points: vec![] });
+    let debounce_handle = std::cell::Cell::new(0i32);
+    let (all_users, set_all_users) = signal(Vec::<User>::new());
+
+    // Reload users whenever question updates (new answers may come from new users)
+    Effect::new(move || {
+        let _ = question.get(); // track question changes
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok(users) = api_get::<Vec<User>>("/api/users").await {
+                set_all_users.set(users);
+            }
+        });
+    });
+
+    // Load this user's existing answer when user changes
+    Effect::new(move || {
+        let user = current_user.get(); // track user changes
+        let q = question.get_untracked(); // don't track question (avoids re-trigger on submit)
+        if let (Some(u), Some(q)) = (user, q) {
+            if let Some(existing) = q.open_answers.iter().find(|a| a.user_name == u.name) {
+                set_my_text.set(existing.text.clone());
+            } else {
+                set_my_text.set(String::new());
+            }
+        }
+    });
+
+    // Fetch positions whenever question updates (embeddings computed server-side)
+    let tid_pos = topic_id.clone();
+    let qid_pos = question_id.clone();
+    Effect::new(move || {
+        let _ = question.get(); // track question changes
+        let tid = tid_pos.clone();
+        let qid = qid_pos.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            // Small delay to let server-side background embedding finish
+            gloo_timers::future::TimeoutFuture::new(200).await;
+            if let Ok(pos) = api_get::<PlanePositions>(
+                &format!("/api/topics/{tid}/questions/{qid}/positions"),
+            )
+            .await
+            {
+                set_positions.set(pos);
+            }
+        });
+    });
+
+    let tid = topic_id.clone();
+    let qid = question_id.clone();
+    let submit_debounced = move |text: String| {
+        let Some(user) = current_user.get_untracked() else {
+            return;
+        };
+        if text.trim().is_empty() {
+            return;
+        }
+        let tid = tid.clone();
+        let qid = qid.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match api_post::<Question>(
+                &format!("/api/topics/{tid}/questions/{qid}/open-answers"),
+                &AddOpenAnswer {
+                    user_name: user.name,
+                    text,
+                },
+            )
+            .await
+            {
+                Ok(q) => set_question.set(Some(q)),
+                Err(e) => log!("[add_open_answer] {e}"),
+            }
+        });
+    };
+
+    let find_user = move |name: &str| -> Option<User> {
+        all_users
+            .get()
+            .into_iter()
+            .find(|u| u.name == name)
+    };
+
+    let tid2 = topic_id.clone();
+
+    view! {
+        <div class="page question-page open-question-page">
+            <a href=format!("#/topic/{tid2}") class="back-link">"Return to questions"</a>
+            <h2 class="question-title">{move || question.get().map(|q| q.text).unwrap_or_default()}</h2>
+
+            <div class="open-answer-form">
+                <div class="textarea-wrap">
+                    <textarea
+                        placeholder="Speak thy mind upon this matter..."
+                        prop:value=my_text
+                        on:input=move |ev| {
+                            let val = event_target_value(&ev);
+                            set_my_text.set(val.clone());
+                            // Debounce: tokenize + submit
+                            let prev = debounce_handle.get();
+                            if prev != 0 {
+                                web_sys::window().unwrap().clear_timeout_with_handle(prev);
+                            }
+                            if val.trim().is_empty() {
+                                set_token_count.set(Some(0));
+                                debounce_handle.set(0);
+                                return;
+                            }
+                            let submit = submit_debounced.clone();
+                            let cb = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+                                let val = val.clone();
+                                // Tokenize
+                                {
+                                    let val = val.clone();
+                                    wasm_bindgen_futures::spawn_local(async move {
+                                        #[derive(serde::Deserialize)]
+                                        struct TokenResp { num_tokens: usize }
+                                        #[derive(serde::Serialize)]
+                                        struct TokenReq { text: String }
+                                        if let Ok(resp) = api_post::<TokenResp>(
+                                            "/embedding/tokenize",
+                                            &TokenReq { text: val },
+                                        ).await {
+                                            set_token_count.set(Some(resp.num_tokens));
+                                        }
+                                    });
+                                }
+                                // Submit
+                                submit(val);
+                            });
+                            let handle = web_sys::window().unwrap()
+                                .set_timeout_with_callback_and_timeout_and_arguments_0(
+                                    cb.as_ref().unchecked_ref(), 500
+                                ).unwrap_or(0);
+                            cb.forget();
+                            debounce_handle.set(handle);
+                        }
+                    />
+                    <div class="token-counter" class:over-limit=move || token_count.get().map(|n| n > 128).unwrap_or(false)>
+                        {move || match token_count.get() {
+                            Some(n) => format!("{n}/128 tokens"),
+                            None => "0/128 tokens".to_string(),
+                        }}
+                    </div>
+                </div>
+            </div>
+
+            <div class="open-plane">
+                <div class="plane-empty-text">
+                    {move || {
+                        let q = question.get();
+                        let n = q.as_ref().map(|q| q.open_answers.len()).unwrap_or(0);
+                        if n == 0 {
+                            "The field lies fallow \u{2014} be the first to plant a thought.".to_string()
+                        } else {
+                            String::new()
+                        }
+                    }}
+                </div>
+                {move || {
+                    let q = question.get();
+                    let Some(q) = q.as_ref() else { return Vec::new() };
+                    let pos = positions.get();
+                    q.open_answers.iter().map(|answer| {
+                        let user = find_user(&answer.user_name);
+                        let (shape, color) = user
+                            .map(|u| (u.shape, u.color))
+                            .unwrap_or((Shape::Circle, "#808080".to_string()));
+                        let pt = pos.points.iter().find(|p| p.user_name == answer.user_name);
+                        let x_pct = pt.map(|p| p.x * 100.0).unwrap_or(50.0);
+                        let y_pct = pt.map(|p| p.y * 100.0).unwrap_or(50.0);
+                        let answer_text = answer.text.clone();
+                        let user_name = answer.user_name.clone();
+                        view! {
+                            <div
+                                class="plane-point"
+                                style:left=format!("{x_pct}%")
+                                style:top=format!("{y_pct}%")
+                            >
+                                <div class="plane-avatar">
+                                    {shape_svg(shape, color, 32.0)}
+                                    <div class="plane-tooltip">
+                                        <strong>{user_name.clone()}</strong>
+                                        <br/>
+                                        {answer_text}
+                                    </div>
+                                </div>
+                                <span class="plane-name">{user_name}</span>
+                            </div>
+                        }
+                    }).collect::<Vec<_>>()
+                }}
             </div>
         </div>
     }
