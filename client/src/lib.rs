@@ -172,16 +172,16 @@ fn HomePage() -> impl IntoView {
 
     view! {
         <div class="page home-page">
-            <h1>"Topics"</h1>
+            <h1>"Discourses"</h1>
             <div class="create-form">
                 <input
                     type="text"
-                    placeholder="New topic title..."
+                    placeholder="Name thy discourse..."
                     prop:value=new_title
                     on:input=move |ev| set_new_title.set(event_target_value(&ev))
                     on:keydown=on_keydown
                 />
-                <button on:click=on_click>"Create"</button>
+                <button on:click=on_click>"Establish"</button>
             </div>
             <Show when=move || error.get().is_some()>
                 <p class="error">{move || error.get().unwrap_or_default()}</p>
@@ -194,7 +194,7 @@ fn HomePage() -> impl IntoView {
                 >
                     <a class="topic-card" href=format!("#/topic/{}", topic.id)>
                         <span class="card-title">{topic.title}</span>
-                        <span class="card-count">{topic.question_count}" questions"</span>
+                        <span class="card-count">{topic.question_count}" questions within"</span>
                     </a>
                 </For>
             </div>
@@ -209,7 +209,6 @@ fn TopicPage(topic_id: String) -> impl IntoView {
     let (topic, set_topic) = signal(Option::<TopicWithCount>::None);
     let (questions, set_questions) = signal(Vec::<Question>::new());
     let (new_text, set_new_text) = signal(String::new());
-    let (new_answers, set_new_answers) = signal(String::new());
 
     let tid = topic_id.clone();
     Effect::new(move || {
@@ -225,51 +224,47 @@ fn TopicPage(topic_id: String) -> impl IntoView {
     });
 
     let tid2 = topic_id.clone();
-    let on_create = move |_: web_sys::MouseEvent| {
+    let do_create = move || {
         let text = new_text.get_untracked();
-        let answers_raw = new_answers.get_untracked();
-        if text.trim().is_empty() || answers_raw.trim().is_empty() {
-            return;
-        }
-        let answers: Vec<String> = answers_raw
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        if answers.len() < 2 {
+        if text.trim().is_empty() {
             return;
         }
         set_new_text.set(String::new());
-        set_new_answers.set(String::new());
         let tid = tid2.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            match api_post::<Question>(&format!("/api/topics/{tid}/questions"), &CreateQuestion { text, answers }).await {
+            match api_post::<Question>(&format!("/api/topics/{tid}/questions"), &CreateQuestion { text }).await {
                 Ok(q) => set_questions.update(|qs| qs.push(q)),
                 Err(e) => log!("[create_question] {e}"),
             }
         });
     };
 
+    let do_create_k = do_create.clone();
+    let on_keydown = move |ev: web_sys::KeyboardEvent| {
+        if ev.key() == "Enter" {
+            do_create_k();
+        }
+    };
+
+    let on_click = move |_: web_sys::MouseEvent| {
+        do_create();
+    };
+
     let tid3 = topic_id.clone();
 
     view! {
         <div class="page topic-page">
-            <a href="#/" class="back-link">"< Back to topics"</a>
+            <a href="#/" class="back-link">"Return to discourses"</a>
             <h1>{move || topic.get().map(|t| t.title).unwrap_or_default()}</h1>
-            <div class="create-form question-form">
+            <div class="create-form">
                 <input
                     type="text"
-                    placeholder="Question..."
+                    placeholder="What matter shall be put to question?"
                     prop:value=new_text
                     on:input=move |ev| set_new_text.set(event_target_value(&ev))
+                    on:keydown=on_keydown
                 />
-                <input
-                    type="text"
-                    placeholder="Answers (comma-separated, min 2)..."
-                    prop:value=new_answers
-                    on:input=move |ev| set_new_answers.set(event_target_value(&ev))
-                />
-                <button on:click=on_create>"Add Question"</button>
+                <button on:click=on_click>"Propose"</button>
             </div>
             <div class="question-list">
                 <For
@@ -280,10 +275,16 @@ fn TopicPage(topic_id: String) -> impl IntoView {
                     {
                         let tid = tid3.clone();
                         let qid = question.id.clone();
+                        let n = question.answers.len();
+                        let subtitle = if n == 0 {
+                            "yet unvoiced".to_string()
+                        } else {
+                            format!("{n} positions voiced")
+                        };
                         view! {
                             <a class="question-card" href=format!("#/topic/{tid}/question/{qid}")>
                                 <span class="question-text">{question.text}</span>
-                                <span class="answer-count">{question.answers.len()}" answers"</span>
+                                <span class="answer-count">{subtitle}</span>
                             </a>
                         }
                     }
@@ -295,13 +296,36 @@ fn TopicPage(topic_id: String) -> impl IntoView {
 
 // ── Question Page: Voting Circle ─────────────────────────────────────
 
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
+
+fn answer_angle(i: usize, n: usize) -> f64 {
+    -FRAC_PI_2 + TAU * (i as f64) / (n as f64)
+}
+
+fn angular_distance(a: f64, b: f64) -> f64 {
+    let mut d = (a - b).abs();
+    if d > PI {
+        d = TAU - d;
+    }
+    d
+}
+
+fn insertion_index(click_angle: f64, n: usize) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    let phi = (click_angle + FRAC_PI_2).rem_euclid(TAU);
+    let f = phi * n as f64 / TAU;
+    (f.ceil() as usize).min(n)
+}
+
 #[component]
 fn QuestionPage(topic_id: String, question_id: String) -> impl IntoView {
     let (question, set_question) = signal(Option::<Question>::None);
-    // Knob position as fraction of radius: (x, y) in [-1, 1]
     let (knob_x, set_knob_x) = signal(0.0_f64);
     let (knob_y, set_knob_y) = signal(0.0_f64);
     let (dragging, set_dragging) = signal(false);
+    let (did_drag, set_did_drag) = signal(false);
 
     let tid = topic_id.clone();
     let qid = question_id.clone();
@@ -315,20 +339,33 @@ fn QuestionPage(topic_id: String, question_id: String) -> impl IntoView {
         });
     });
 
-    // Compute opinion text from knob position
-    // Thresholds: (max_distance, label_format)
+    let num_answers = Memo::new(move |_| {
+        question.get().map(|q| q.answers.len()).unwrap_or(0)
+    });
+
+    // Opinion text — in the manner of Ben Jonson
     const BANDS: &[(f64, &str)] = &[
-        (0.12, ""),                    // no opinion zone
-        (0.35, "I lean towards {}"),
-        (0.65, "I agree with {}"),
-        (1.01, "I totally agree with {}"),
+        (0.12, ""),
+        (0.35, "My inclination tends towards {}"),
+        (0.65, "I find myself persuaded by {}"),
+        (1.01, "With settled conviction, I hold firmly with {}"),
     ];
 
     let opinion_text = Memo::new(move |_| {
         let q = question.get();
         let Some(q) = q.as_ref() else { return String::new() };
         let n = q.answers.len();
-        if n == 0 { return String::new() }
+
+        if n == 0 {
+            return "\u{2022} The circle stands empty, a stage awaiting its players. \
+                    Pray, touch it, and set forth a position."
+                .to_string();
+        }
+        if n == 1 {
+            return "\u{2022} A solitary voice echoes \u{2014} yet true discourse \
+                    demands a partner. Touch the circle once more."
+                .to_string();
+        }
 
         let x = knob_x.get();
         let y = knob_y.get();
@@ -336,84 +373,142 @@ fn QuestionPage(topic_id: String, question_id: String) -> impl IntoView {
 
         let band = BANDS.iter().find(|(max, _)| dist < *max).unwrap();
         if band.1.is_empty() {
-            return "I have no opinion on this".to_string();
+            return "I remain unswayed, holding no fixed position in this matter.".to_string();
         }
 
         let angle = y.atan2(x);
-        // Score each answer by angular distance to knob
         let mut scored: Vec<(usize, f64)> = (0..n)
-            .map(|i| {
-                let a = -std::f64::consts::FRAC_PI_2
-                    + 2.0 * std::f64::consts::PI * (i as f64) / (n as f64);
-                let mut diff = (angle - a).abs();
-                if diff > std::f64::consts::PI {
-                    diff = 2.0 * std::f64::consts::PI - diff;
-                }
-                (i, diff)
-            })
+            .map(|i| (i, angular_distance(angle, answer_angle(i, n))))
             .collect();
         scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
 
         let closest = &q.answers[scored[0].0];
 
-        // Check if roughly equidistant between two answers
         if n >= 2 && dist > 0.25 {
             let ratio = scored[0].1 / scored[1].1.max(0.001);
             if ratio > 0.7 {
                 let second = &q.answers[scored[1].0];
-                return format!("I'm in between {closest} and {second}");
+                return format!(
+                    "My judgement hangs divided betwixt {closest} and {second}."
+                );
             }
         }
 
-        band.1.replace("{}", closest)
+        format!("{}.", band.1.replace("{}", closest))
     });
 
-    let on_pointerdown = move |ev: web_sys::PointerEvent| {
+    // Knob drag — only on the knob element
+    let on_knob_pointerdown = move |ev: web_sys::PointerEvent| {
+        ev.stop_propagation();
         set_dragging.set(true);
-        let target = ev.target().unwrap();
+        set_did_drag.set(false);
+        let target = ev.current_target().unwrap();
         let el: &web_sys::Element = target.unchecked_ref();
         el.set_pointer_capture(ev.pointer_id()).ok();
-        update_knob_from_event(&ev, &set_knob_x, &set_knob_y);
     };
 
-    let on_pointermove = move |ev: web_sys::PointerEvent| {
-        if dragging.get_untracked() {
-            update_knob_from_event(&ev, &set_knob_x, &set_knob_y);
+    let on_knob_pointermove = move |ev: web_sys::PointerEvent| {
+        if !dragging.get_untracked() {
+            return;
         }
+        set_did_drag.set(true);
+        let target = ev.current_target().unwrap();
+        let el: web_sys::HtmlElement = target.unchecked_into();
+        let circle = el
+            .closest(".vote-circle")
+            .unwrap()
+            .unwrap();
+        let rect = circle.get_bounding_client_rect();
+        let cx = rect.left() + rect.width() / 2.0;
+        let cy = rect.top() + rect.height() / 2.0;
+        let radius = rect.width() / 2.0;
+        let mut nx = (ev.client_x() as f64 - cx) / radius;
+        let mut ny = (ev.client_y() as f64 - cy) / radius;
+        let dist = (nx * nx + ny * ny).sqrt();
+        if dist > 1.0 {
+            nx /= dist;
+            ny /= dist;
+        }
+        set_knob_x.set(nx);
+        set_knob_y.set(ny);
     };
 
-    let on_pointerup = move |_ev: web_sys::PointerEvent| {
+    let on_knob_pointerup = move |_ev: web_sys::PointerEvent| {
         set_dragging.set(false);
+    };
+
+    // Click on circle → add answer
+    let tid_add = topic_id.clone();
+    let qid_add = question_id.clone();
+    let on_circle_click = move |ev: web_sys::MouseEvent| {
+        if did_drag.get_untracked() {
+            set_did_drag.set(false);
+            return;
+        }
+        // Don't add if clicking on the knob
+        let target = ev.target().unwrap();
+        let el: &web_sys::Element = target.unchecked_ref();
+        if el.class_list().contains("knob") {
+            return;
+        }
+
+        let circle_el = ev.current_target().unwrap();
+        let circle: &web_sys::Element = circle_el.unchecked_ref();
+        let rect = circle.get_bounding_client_rect();
+        let cx = rect.left() + rect.width() / 2.0;
+        let cy = rect.top() + rect.height() / 2.0;
+        let click_angle = (ev.client_y() as f64 - cy).atan2(ev.client_x() as f64 - cx);
+        let n = num_answers.get_untracked();
+        let index = insertion_index(click_angle, n);
+
+        let window = web_sys::window().unwrap();
+        let text = window
+            .prompt_with_message("What position shall here be voiced?")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if text.trim().is_empty() {
+            return;
+        }
+
+        let tid = tid_add.clone();
+        let qid = qid_add.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match api_post::<Question>(
+                &format!("/api/topics/{tid}/questions/{qid}/answers"),
+                &AddAnswer {
+                    text,
+                    index,
+                },
+            )
+            .await
+            {
+                Ok(q) => set_question.set(Some(q)),
+                Err(e) => log!("[add_answer] {e}"),
+            }
+        });
     };
 
     let tid2 = topic_id.clone();
 
     view! {
         <div class="page question-page">
-            <a href=format!("#/topic/{tid2}") class="back-link">"< Back to questions"</a>
+            <a href=format!("#/topic/{tid2}") class="back-link">"Return to questions"</a>
             <h2 class="question-title">{move || question.get().map(|q| q.text).unwrap_or_default()}</h2>
 
             <div class="opinion-text">{opinion_text}</div>
 
-            <div
-                class="vote-circle-container"
-                on:pointerdown=on_pointerdown
-                on:pointermove=on_pointermove
-                on:pointerup=on_pointerup
-            >
-                <div class="vote-circle">
-                    // Answer labels positioned around the circle
+            <div class="vote-circle-container">
+                <div class="vote-circle" on:click=on_circle_click>
                     {move || {
                         let q = question.get();
                         let Some(q) = q.as_ref() else { return Vec::new() };
                         let n = q.answers.len();
                         q.answers.iter().enumerate().map(|(i, answer)| {
-                            let angle = -std::f64::consts::FRAC_PI_2
-                                + 2.0 * std::f64::consts::PI * (i as f64) / (n as f64);
-                            let label_r = 52.0; // % from center for labels (outside circle)
+                            let angle = answer_angle(i, n);
+                            let label_r = 52.0;
                             let lx = 50.0 + label_r * angle.cos();
                             let ly = 50.0 + label_r * angle.sin();
-                            // Dot on the circle edge
                             let dot_r = 43.0;
                             let dx = 50.0 + dot_r * angle.cos();
                             let dy = 50.0 + dot_r * angle.sin();
@@ -434,51 +529,19 @@ fn QuestionPage(topic_id: String, question_id: String) -> impl IntoView {
                         }).collect::<Vec<_>>()
                     }}
 
-                    // Draggable knob
-                    <div
-                        class="knob"
-                        class:dragging=dragging
-                        style:left=move || format!("{}%", 50.0 + knob_x.get() * 43.0)
-                        style:top=move || format!("{}%", 50.0 + knob_y.get() * 43.0)
-                    />
+                    <Show when=move || { num_answers.get() >= 2 }>
+                        <div
+                            class="knob"
+                            class:dragging=dragging
+                            style:left=move || format!("{}%", 50.0 + knob_x.get() * 43.0)
+                            style:top=move || format!("{}%", 50.0 + knob_y.get() * 43.0)
+                            on:pointerdown=on_knob_pointerdown
+                            on:pointermove=on_knob_pointermove
+                            on:pointerup=on_knob_pointerup
+                        />
+                    </Show>
                 </div>
             </div>
         </div>
     }
-}
-
-fn update_knob_from_event(
-    ev: &web_sys::PointerEvent,
-    set_x: &WriteSignal<f64>,
-    set_y: &WriteSignal<f64>,
-) {
-    // Find the .vote-circle element
-    let target = ev.current_target().unwrap();
-    let container: &web_sys::HtmlElement = target.unchecked_ref();
-    let circle = container
-        .query_selector(".vote-circle")
-        .unwrap()
-        .unwrap();
-    let rect = circle.get_bounding_client_rect();
-
-    let cx = rect.left() + rect.width() / 2.0;
-    let cy = rect.top() + rect.height() / 2.0;
-    let radius = rect.width() / 2.0;
-
-    let mx = ev.client_x() as f64 - cx;
-    let my = ev.client_y() as f64 - cy;
-
-    // Normalize to [-1, 1] range
-    let mut nx = mx / radius;
-    let mut ny = my / radius;
-
-    // Clamp to unit circle
-    let dist = (nx * nx + ny * ny).sqrt();
-    if dist > 1.0 {
-        nx /= dist;
-        ny /= dist;
-    }
-
-    set_x.set(nx);
-    set_y.set(ny);
 }

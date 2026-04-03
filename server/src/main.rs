@@ -1,6 +1,6 @@
 use actix_files::Files;
 use actix_web::{App, HttpResponse, HttpServer, middleware, web};
-use mace_reforge_shared::{CreateQuestion, CreateTopic, Question, Topic, TopicWithCount};
+use mace_reforge_shared::{AddAnswer, CreateQuestion, CreateTopic, Question, Topic, TopicWithCount};
 use std::net::TcpListener;
 use std::os::unix::io::FromRawFd;
 use std::sync::Mutex;
@@ -106,11 +106,27 @@ async fn create_question(
             id: db.new_id(),
             topic_id,
             text: body.text.clone(),
-            answers: body.answers.clone(),
+            answers: vec![],
         };
         let resp = HttpResponse::Ok().json(&question);
         db.questions.push(question);
         resp
+    })
+}
+
+async fn add_answer(
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+    body: web::Json<AddAnswer>,
+) -> HttpResponse {
+    let (_topic_id, question_id) = path.into_inner();
+    state.with_db_save(|db| {
+        let Some(q) = db.questions.iter_mut().find(|q| q.id == question_id) else {
+            return HttpResponse::NotFound().finish();
+        };
+        let index = body.index.min(q.answers.len());
+        q.answers.insert(index, body.text.clone());
+        HttpResponse::Ok().json(q.clone())
     })
 }
 
@@ -205,6 +221,10 @@ async fn main() -> std::io::Result<()> {
             .route(
                 "/api/topics/{topic_id}/questions/{question_id}",
                 web::get().to(get_question),
+            )
+            .route(
+                "/api/topics/{topic_id}/questions/{question_id}/answers",
+                web::post().to(add_answer),
             )
             .service(Files::new("/", "./client/dist").index_file("index.html"))
     })

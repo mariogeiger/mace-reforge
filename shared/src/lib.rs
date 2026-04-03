@@ -22,7 +22,12 @@ pub struct CreateTopic {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateQuestion {
     pub text: String,
-    pub answers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddAnswer {
+    pub text: String,
+    pub index: usize,
 }
 
 /// Topic with computed question count, returned by API
