@@ -20,14 +20,10 @@ fn answer_angle(i: usize, n: usize) -> f64 {
 }
 
 fn angular_distance(a: f64, b: f64) -> f64 {
-    let d = (a - b).abs();
-    if d > PI { TAU - d } else { d }
+    ((a - b + PI).rem_euclid(TAU) - PI).abs()
 }
 
 fn insertion_index(click_angle: f64, n: usize) -> usize {
-    if n == 0 {
-        return 0;
-    }
     let phi = (click_angle + FRAC_PI_2).rem_euclid(TAU);
     ((phi * n as f64 / TAU).ceil() as usize).min(n)
 }
@@ -45,56 +41,51 @@ fn circle_metrics(el: &web_sys::Element) -> (f64, f64, f64) {
 /// Client pixel coords -> normalised circle coords, clamped to the unit disc.
 fn to_normalised(px: f64, py: f64, el: &web_sys::Element) -> (f64, f64) {
     let (cx, cy, s) = circle_metrics(el);
-    let (mut nx, mut ny) = ((px - cx) / s, (py - cy) / s);
-    let d = (nx * nx + ny * ny).sqrt();
-    if d > 1.0 {
-        nx /= d;
-        ny /= d;
-    }
-    (nx, ny)
+    let (nx, ny) = ((px - cx) / s, (py - cy) / s);
+    let d = (nx * nx + ny * ny).sqrt().max(1.0);
+    (nx / d, ny / d)
 }
 
 // ── Opinion text (Ben Jonson voice) ─────────────────────────────────
 
+/// Static messages when fewer than 2 answers exist (indexed by answer count).
+const FEW_ANSWERS: &[&str] = &[
+    "The circle stands empty, a stage awaiting its players. \
+     Pray, touch it, and set forth a position.",
+    "A solitary voice echoes \u{2014} yet true discourse \
+     demands a partner. Touch the circle once more.",
+];
+
+/// Distance-from-center → conviction template. The first entry has no `{}`
+/// so `replace("{}", x)` is a no-op, producing the "unswayed" text directly.
 const BANDS: &[(f64, &str)] = &[
-    (0.12, ""),
-    (0.35, "My inclination tends towards {}"),
-    (0.65, "I find myself persuaded by {}"),
-    (1.01, "With settled conviction, I hold firmly with {}"),
+    (0.12, "I remain unswayed, holding no fixed position in this matter."),
+    (0.35, "My inclination tends towards {}."),
+    (0.65, "I find myself persuaded by {}."),
+    (1.01, "With settled conviction, I hold firmly with {}."),
 ];
 
 fn opinion(q: &Question, x: f64, y: f64) -> String {
     let n = q.answers.len();
-    if n == 0 {
-        return "The circle stands empty, a stage awaiting its players. \
-                Pray, touch it, and set forth a position."
-            .into();
-    }
-    if n == 1 {
-        return "A solitary voice echoes \u{2014} yet true discourse \
-                demands a partner. Touch the circle once more."
-            .into();
+    if n < FEW_ANSWERS.len() {
+        return FEW_ANSWERS[n].into();
     }
 
     let dist = (x * x + y * y).sqrt();
-    let band = BANDS.iter().find(|(max, _)| dist < *max).unwrap();
-    if band.1.is_empty() {
-        return "I remain unswayed, holding no fixed position in this matter.".into();
-    }
+    let band = BANDS.iter().find(|(max, _)| dist < *max).unwrap().1;
 
     let angle = y.atan2(x);
     let mut scored: Vec<(usize, f64)> = (0..n)
         .map(|i| (i, angular_distance(angle, answer_angle(i, n))))
         .collect();
     scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-    let closest = &q.answers[scored[0].0];
 
-    if n >= 2 && dist > 0.25 && scored[0].1 / scored[1].1.max(0.001) > 0.7 {
-        let second = &q.answers[scored[1].0];
-        return format!("My judgement hangs divided betwixt {closest} and {second}.");
+    if dist > 0.25 && scored[0].1 / scored[1].1.max(0.001) > 0.7 {
+        let (a, b) = (&q.answers[scored[0].0], &q.answers[scored[1].0]);
+        return format!("My judgement hangs divided betwixt {a} and {b}.");
     }
 
-    format!("{}.", band.1.replace("{}", closest))
+    band.replace("{}", &q.answers[scored[0].0])
 }
 
 // ── Component ───────────────────────────────────────────────────────
