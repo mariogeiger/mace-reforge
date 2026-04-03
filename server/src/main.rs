@@ -2,8 +2,8 @@ use actix_files::Files;
 use actix_web::{App, HttpResponse, HttpServer, middleware, web};
 use futures_util::StreamExt as _;
 use mace_reforge_shared::{
-    AddAnswer, AddOpenAnswer, CastVote, CreateQuestion, CreateTopic, PlanePoint, PlanePositions,
-    Question, Topic, TopicWithCount, User, Vote, WsMsg,
+    AddAnswer, AddOpenAnswer, CastVote, CreateQuestion, CreateTopic, DeleteAnswer, EditAnswer,
+    PlanePoint, PlanePositions, Question, Topic, TopicWithCount, User, Vote, WsMsg,
 };
 use std::collections::HashMap;
 use std::net::TcpListener;
@@ -174,6 +174,60 @@ async fn add_answer(
         };
         let index = body.index.min(q.answers.len());
         q.answers.insert(index, body.text.clone());
+        Some(q.clone())
+    });
+    match result {
+        Some(q) => {
+            if let Ok(msg) = serde_json::to_string(&WsMsg::QuestionUpdated { question: q.clone() }) {
+                state.broadcast(&question_id, &msg);
+            }
+            HttpResponse::Ok().json(q)
+        }
+        None => HttpResponse::NotFound().finish(),
+    }
+}
+
+async fn edit_answer(
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+    body: web::Json<EditAnswer>,
+) -> HttpResponse {
+    let (_topic_id, question_id) = path.into_inner();
+    let qid = question_id.clone();
+    let result = state.with_db_save(|db| {
+        let Some(q) = db.questions.iter_mut().find(|q| q.id == qid) else {
+            return None;
+        };
+        if body.index < q.answers.len() {
+            q.answers[body.index] = body.text.clone();
+        }
+        Some(q.clone())
+    });
+    match result {
+        Some(q) => {
+            if let Ok(msg) = serde_json::to_string(&WsMsg::QuestionUpdated { question: q.clone() }) {
+                state.broadcast(&question_id, &msg);
+            }
+            HttpResponse::Ok().json(q)
+        }
+        None => HttpResponse::NotFound().finish(),
+    }
+}
+
+async fn delete_answer(
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+    body: web::Json<DeleteAnswer>,
+) -> HttpResponse {
+    let (_topic_id, question_id) = path.into_inner();
+    let qid = question_id.clone();
+    let result = state.with_db_save(|db| {
+        let Some(q) = db.questions.iter_mut().find(|q| q.id == qid) else {
+            return None;
+        };
+        if body.index < q.answers.len() {
+            q.answers.remove(body.index);
+        }
         Some(q.clone())
     });
     match result {
@@ -731,6 +785,14 @@ async fn main() -> std::io::Result<()> {
             .route(
                 "/api/topics/{topic_id}/questions/{question_id}/answers",
                 web::post().to(add_answer),
+            )
+            .route(
+                "/api/topics/{topic_id}/questions/{question_id}/answers/edit",
+                web::post().to(edit_answer),
+            )
+            .route(
+                "/api/topics/{topic_id}/questions/{question_id}/answers/delete",
+                web::post().to(delete_answer),
             )
             // Votes (closed)
             .route(

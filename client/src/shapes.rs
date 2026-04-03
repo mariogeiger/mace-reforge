@@ -8,10 +8,17 @@ pub const ALL_SHAPES: &[Shape] = &[
     Shape::Diamond,
     Shape::Star,
     Shape::Hexagon,
+    Shape::Heart,
+    Shape::Arrow,
+    Shape::Lightning,
+    Shape::Drop,
+    Shape::Leaf,
+    Shape::Cross,
 ];
 
 pub const PALETTE: &[&str] = &[
-    "#c0392b", "#e67e22", "#f1c40f", "#27ae60", "#2980b9", "#8e44ad", "#e84393", "#2d3436",
+    "#c0392b", "#e67e22", "#f1c40f", "#27ae60", "#2980b9",
+    "#8e44ad", "#e84393", "#1abc9c", "#d35400", "#2d3436",
 ];
 
 pub fn shape_svg(shape: Shape, color: String, size: f64) -> impl IntoView {
@@ -84,6 +91,90 @@ pub fn shape_svg(shape: Shape, color: String, size: f64) -> impl IntoView {
             }
             format!(r#"<polygon points="{pts}" fill="{color}"/>"#)
         }
+        Shape::Heart => {
+            let sc = s / 100.0;
+            format!(
+                r#"<path d="M {:.1} {:.1} C {:.1} {:.1} {:.1} {:.1} {:.1} {:.1} C {:.1} {:.1} {:.1} {:.1} {:.1} {:.1} C {:.1} {:.1} {:.1} {:.1} {:.1} {:.1} C {:.1} {:.1} {:.1} {:.1} {:.1} {:.1} C {:.1} {:.1} {:.1} {:.1} {:.1} {:.1} C {:.1} {:.1} {:.1} {:.1} {:.1} {:.1} Z" fill="{color}"/>"#,
+                50.0*sc, 22.0*sc,
+                50.0*sc, 22.0*sc, 42.0*sc, 8.0*sc, 30.0*sc, 8.0*sc,
+                18.0*sc, 8.0*sc, 5.0*sc, 18.0*sc, 5.0*sc, 34.0*sc,
+                5.0*sc, 52.0*sc, 20.0*sc, 68.0*sc, 50.0*sc, 88.0*sc,
+                80.0*sc, 68.0*sc, 95.0*sc, 52.0*sc, 95.0*sc, 34.0*sc,
+                95.0*sc, 18.0*sc, 82.0*sc, 8.0*sc, 70.0*sc, 8.0*sc,
+                58.0*sc, 8.0*sc, 50.0*sc, 22.0*sc, 50.0*sc, 22.0*sc,
+            )
+        }
+        Shape::Arrow => {
+            let sc = s / 100.0;
+            format!(
+                r#"<polygon points="{:.1},{:.1} {:.1},{:.1} {:.1},{:.1} {:.1},{:.1} {:.1},{:.1} {:.1},{:.1} {:.1},{:.1}" fill="{color}"/>"#,
+                8.0*sc,  8.0*sc,
+                55.0*sc, 8.0*sc,
+                92.0*sc, 50.0*sc,
+                55.0*sc, 92.0*sc,
+                8.0*sc,  92.0*sc,
+                45.0*sc, 50.0*sc,
+                8.0*sc,  8.0*sc,
+            )
+        }
+        Shape::Lightning => {
+            let sc = s / 100.0;
+            format!(
+                r#"<polygon points="{:.1},{:.1} {:.1},{:.1} {:.1},{:.1} {:.1},{:.1} {:.1},{:.1} {:.1},{:.1} {:.1},{:.1}" fill="{color}"/>"#,
+                55.0*sc, 5.0*sc,
+                20.0*sc, 48.0*sc,
+                45.0*sc, 48.0*sc,
+                35.0*sc, 95.0*sc,
+                80.0*sc, 40.0*sc,
+                52.0*sc, 40.0*sc,
+                65.0*sc, 5.0*sc,
+            )
+        }
+        Shape::Drop => {
+            let sc = s / 100.0;
+            format!(
+                r#"<path d="M {:.1} {:.1} C {:.1} {:.1} {:.1} {:.1} {:.1} {:.1} C {:.1} {:.1} {:.1} {:.1} {:.1} {:.1} C {:.1} {:.1} {:.1} {:.1} {:.1} {:.1} Z" fill="{color}"/>"#,
+                50.0*sc, 8.0*sc,
+                50.0*sc, 8.0*sc, 18.0*sc, 42.0*sc, 18.0*sc, 58.0*sc,
+                18.0*sc, 78.0*sc, 32.0*sc, 92.0*sc, 50.0*sc, 92.0*sc,
+                68.0*sc, 92.0*sc, 82.0*sc, 78.0*sc, 82.0*sc, 58.0*sc,
+            ) + &format!(
+                r#"<path d="M {:.1} {:.1} C {:.1} {:.1} {:.1} {:.1} {:.1} {:.1} Z" fill="{color}"/>"#,
+                82.0*sc, 58.0*sc,
+                82.0*sc, 42.0*sc, 50.0*sc, 8.0*sc, 50.0*sc, 8.0*sc,
+            )
+        }
+        Shape::Leaf => {
+            let sc = s / 100.0;
+            format!(
+                r#"<path d="M {:.1} {:.1} C {:.1} {:.1} {:.1} {:.1} {:.1} {:.1} C {:.1} {:.1} {:.1} {:.1} {:.1} {:.1} Z" fill="{color}"/> <path d="M {:.1} {:.1} Q {:.1} {:.1} {:.1} {:.1}" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="{:.1}"/>"#,
+                18.0*sc, 88.0*sc,
+                8.0*sc, 50.0*sc, 25.0*sc, 12.0*sc, 55.0*sc, 8.0*sc,
+                88.0*sc, 5.0*sc, 88.0*sc, 55.0*sc, 18.0*sc, 88.0*sc,
+                18.0*sc, 88.0*sc,
+                48.0*sc, 42.0*sc, 60.0*sc, 18.0*sc,
+                2.0*sc,
+            )
+        }
+        Shape::Cross => {
+            let sc = s / 100.0;
+            let w = 28.0; // half-width of arm
+            format!(
+                r#"<polygon points="{},{} {},{} {},{} {},{} {},{} {},{} {},{} {},{} {},{} {},{} {},{} {},{}" fill="{color}"/>"#,
+                (50.0-w)*sc, 8.0*sc,
+                (50.0+w)*sc, 8.0*sc,
+                (50.0+w)*sc, (50.0-w)*sc,
+                92.0*sc, (50.0-w)*sc,
+                92.0*sc, (50.0+w)*sc,
+                (50.0+w)*sc, (50.0+w)*sc,
+                (50.0+w)*sc, 92.0*sc,
+                (50.0-w)*sc, 92.0*sc,
+                (50.0-w)*sc, (50.0+w)*sc,
+                8.0*sc, (50.0+w)*sc,
+                8.0*sc, (50.0-w)*sc,
+                (50.0-w)*sc, (50.0-w)*sc,
+            )
+        }
     };
 
     view! {
@@ -103,5 +194,11 @@ pub fn shape_name(shape: &Shape) -> &'static str {
         Shape::Diamond => "Diamond",
         Shape::Star => "Star",
         Shape::Hexagon => "Hexagon",
+        Shape::Heart => "Heart",
+        Shape::Arrow => "Arrow",
+        Shape::Lightning => "Lightning",
+        Shape::Drop => "Drop",
+        Shape::Leaf => "Leaf",
+        Shape::Cross => "Cross",
     }
 }

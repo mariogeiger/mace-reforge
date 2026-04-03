@@ -10,8 +10,8 @@ use crate::shapes::shape_svg;
 
 /// Answers and vote avatars sit at this % of circle-element width from center.
 const R: f64 = 43.0;
-/// Labels sit slightly further out.
-const LABEL_R: f64 = 52.0;
+/// Labels sit on the edge of the container (outside the circle).
+const LABEL_R: f64 = 50.0;
 /// Pixel radius for avatar hit-testing on pointer down.
 const HIT_PX: f64 = 24.0;
 
@@ -23,11 +23,6 @@ fn angular_distance(a: f64, b: f64) -> f64 {
     ((a - b + PI).rem_euclid(TAU) - PI).abs()
 }
 
-fn insertion_index(click_angle: f64, n: usize) -> usize {
-    let phi = (click_angle + FRAC_PI_2).rem_euclid(TAU);
-    ((phi * n as f64 / TAU).ceil() as usize).min(n)
-}
-
 /// (center_x_px, center_y_px, scale_px) where scale converts +-1 normalised coords to pixels.
 fn circle_metrics(el: &web_sys::Element) -> (f64, f64, f64) {
     let r = el.get_bounding_client_rect();
@@ -36,6 +31,23 @@ fn circle_metrics(el: &web_sys::Element) -> (f64, f64, f64) {
         r.top() + r.height() / 2.0,
         r.width() * R / 100.0,
     )
+}
+
+/// CSS class for smart label alignment based on angle around circle.
+/// Returns (horizontal_align, vertical_align) as CSS class fragments.
+fn label_align(angle: f64) -> &'static str {
+    let cos = angle.cos();
+    let sin = angle.sin();
+    // Threshold: if |cos| > 0.5 it's clearly left/right; else it's top/bottom
+    if cos > 0.5 {
+        if sin.abs() < 0.4 { "align-right" } else if sin < 0.0 { "align-top-right" } else { "align-bottom-right" }
+    } else if cos < -0.5 {
+        if sin.abs() < 0.4 { "align-left" } else if sin < 0.0 { "align-top-left" } else { "align-bottom-left" }
+    } else if sin < 0.0 {
+        "align-top"
+    } else {
+        "align-bottom"
+    }
 }
 
 /// Client pixel coords -> normalised circle coords, clamped to the unit disc.
@@ -124,7 +136,6 @@ pub fn ClosedQuestionPage(
     let (knob_x, set_knob_x) = signal(0.0_f64);
     let (knob_y, set_knob_y) = signal(0.0_f64);
     let (dragging, set_dragging) = signal(false);
-    let (did_drag, set_did_drag) = signal(false);
     let (all_users, set_all_users) = signal(Vec::<User>::new());
     let (ws, set_ws) = signal(Option::<web_sys::WebSocket>::None);
 
@@ -208,10 +219,6 @@ pub fn ClosedQuestionPage(
 
     // ── Derived state ───────────────────────────────────────────────
 
-    let num_answers = Memo::new(move |_| {
-        question.get().map(|q| q.answers.len()).unwrap_or(0)
-    });
-
     let qid = Memo::new(move |_| {
         question
             .get()
@@ -283,7 +290,6 @@ pub fn ClosedQuestionPage(
             ev.prevent_default();
             let _ = el.set_pointer_capture(ev.pointer_id());
             set_dragging.set(true);
-            set_did_drag.set(true);
         }
     };
 
@@ -319,19 +325,9 @@ pub fn ClosedQuestionPage(
         save_vote();
     };
 
-    // Click on empty circle -> add answer
+    // Add answer at a given insertion index
     let tid_add = topic_id.clone();
-    let on_click = move |ev: web_sys::MouseEvent| {
-        if did_drag.get_untracked() {
-            set_did_drag.set(false);
-            return;
-        }
-        let el: web_sys::Element = ev.current_target().unwrap().unchecked_into();
-        let r = el.get_bounding_client_rect();
-        let angle = (ev.client_y() as f64 - r.top() - r.height() / 2.0)
-            .atan2(ev.client_x() as f64 - r.left() - r.width() / 2.0);
-        let idx = insertion_index(angle, num_answers.get_untracked());
-
+    let do_add = move |index: usize| {
         let text = web_sys::window()
             .unwrap()
             .prompt_with_message("What position shall here be voiced?")
@@ -341,18 +337,64 @@ pub fn ClosedQuestionPage(
         if text.trim().is_empty() {
             return;
         }
-
         let tid = tid_add.clone();
         let qid = qid.get_untracked();
         wasm_bindgen_futures::spawn_local(async move {
             match api_post::<Question>(
                 &format!("/api/topics/{tid}/questions/{qid}/answers"),
-                &AddAnswer { text, index: idx },
+                &AddAnswer { text, index },
             )
             .await
             {
                 Ok(q) => set_question.set(Some(q)),
                 Err(e) => log!("[add_answer] {e}"),
+            }
+        });
+    };
+
+    // ── Edit / delete answer helpers ───────────────────────────────
+
+    let tid_edit = topic_id.clone();
+    let do_edit = move |index: usize| {
+        let q = question.get_untracked();
+        let old = q.and_then(|q| q.answers.get(index).cloned()).unwrap_or_default();
+        let text = web_sys::window()
+            .unwrap()
+            .prompt_with_message_and_default("Amend this position:", &old)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if text.trim().is_empty() || text == old {
+            return;
+        }
+        let tid = tid_edit.clone();
+        let qid = qid.get_untracked();
+        wasm_bindgen_futures::spawn_local(async move {
+            match api_post::<Question>(
+                &format!("/api/topics/{tid}/questions/{qid}/answers/edit"),
+                &EditAnswer { index, text },
+            )
+            .await
+            {
+                Ok(q) => set_question.set(Some(q)),
+                Err(e) => log!("[edit_answer] {e}"),
+            }
+        });
+    };
+
+    let tid_del = topic_id.clone();
+    let do_delete = move |index: usize| {
+        let tid = tid_del.clone();
+        let qid = qid.get_untracked();
+        wasm_bindgen_futures::spawn_local(async move {
+            match api_post::<Question>(
+                &format!("/api/topics/{tid}/questions/{qid}/answers/delete"),
+                &DeleteAnswer { index },
+            )
+            .await
+            {
+                Ok(q) => set_question.set(Some(q)),
+                Err(e) => log!("[delete_answer] {e}"),
             }
         });
     };
@@ -368,27 +410,74 @@ pub fn ClosedQuestionPage(
             <div class="opinion-text">{opinion_text}</div>
 
             <div class="vote-circle-container">
+                // Answer labels (in container, outside circle, with edit/delete)
+                {move || {
+                    let Some(q) = question.get() else { return Vec::new() };
+                    let n = q.answers.len();
+                    q.answers.iter().enumerate().map(|(i, ans)| {
+                        let a = answer_angle(i, n);
+                        let (lx, ly) = (50.0 + LABEL_R * a.cos(), 50.0 + LABEL_R * a.sin());
+                        let align = label_align(a);
+                        let do_edit = do_edit.clone();
+                        let do_delete = do_delete.clone();
+                        view! {
+                            <div class=format!("answer-label {align}")
+                                style:left=format!("{lx}%") style:top=format!("{ly}%")>
+                                <span class="answer-label-text">{ans.clone()}</span>
+                                <span class="answer-label-actions">
+                                    <button class="answer-btn answer-edit-btn"
+                                        on:click=move |_| do_edit(i)
+                                        title="Edit"
+                                    >"\u{270E}"</button>
+                                    <button class="answer-btn answer-delete-btn"
+                                        on:click=move |_| do_delete(i)
+                                        title="Remove"
+                                    >"\u{00D7}"</button>
+                                </span>
+                            </div>
+                        }
+                    }).collect::<Vec<_>>()
+                }}
+
+                // "+" buttons between answers (on the rim, in container coords)
+                {move || {
+                    let Some(q) = question.get() else { return Vec::new() };
+                    let n = q.answers.len();
+                    let count = n.max(1);
+                    (0..count).map(|i| {
+                        let a = if n == 0 {
+                            -FRAC_PI_2
+                        } else {
+                            answer_angle(i, n) + TAU / (2 * n) as f64
+                        };
+                        let (bx, by) = (50.0 + LABEL_R * a.cos(), 50.0 + LABEL_R * a.sin());
+                        let idx = if n == 0 { 0 } else { (i + 1) % n };
+                        let do_add = do_add.clone();
+                        view! {
+                            <button class="answer-add-btn"
+                                style:left=format!("{bx}%") style:top=format!("{by}%")
+                                on:click=move |_| do_add(idx)
+                                title="Add position"
+                            >"+"</button>
+                        }
+                    }).collect::<Vec<_>>()
+                }}
+
                 <div class="vote-circle"
-                    on:click=on_click
                     on:pointerdown=on_pointerdown
                     on:pointermove=on_pointermove
                     on:pointerup=on_pointerup
                 >
-                    // Answer dots and labels
+                    // Answer dots (on the circle rim)
                     {move || {
                         let Some(q) = question.get() else { return Vec::new() };
                         let n = q.answers.len();
-                        q.answers.iter().enumerate().map(|(i, ans)| {
+                        (0..n).map(|i| {
                             let a = answer_angle(i, n);
                             let (dx, dy) = (50.0 + R * a.cos(), 50.0 + R * a.sin());
-                            let (lx, ly) = (50.0 + LABEL_R * a.cos(), 50.0 + LABEL_R * a.sin());
                             view! {
                                 <div class="answer-dot"
                                     style:left=format!("{dx}%") style:top=format!("{dy}%") />
-                                <div class="answer-label"
-                                    style:left=format!("{lx}%") style:top=format!("{ly}%")>
-                                    {ans.clone()}
-                                </div>
                             }
                         }).collect::<Vec<_>>()
                     }}

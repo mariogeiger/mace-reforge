@@ -66,6 +66,12 @@ pub enum Shape {
     Diamond,
     Star,
     Hexagon,
+    Heart,
+    Arrow,
+    Lightning,
+    Drop,
+    Leaf,
+    Cross,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +98,17 @@ pub struct CreateQuestion {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddAnswer {
     pub text: String,
+    pub index: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditAnswer {
+    pub index: usize,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteAnswer {
     pub index: usize,
 }
 

@@ -73,97 +73,100 @@ pub fn UserBadge(
 
     view! {
         <div class="user-badge-area">
-            <Show
-                when=move || !editing.get()
-                fallback=move || {
+            // Badge always in flow — keeps header height constant
+            {move || {
+                if let Some(u) = user.get() {
+                    view! {
+                        <button class="user-badge" on:click=open_editor>
+                            <span class="badge-avatar">{shape_svg(u.shape.clone(), u.color.clone(), 28.0)}</span>
+                            <span class="badge-name">{u.name}</span>
+                        </button>
+                    }.into_any()
+                } else {
+                    view! {
+                        <button class="user-badge user-badge-empty" on:click=open_editor>
+                            "Set thy identity"
+                        </button>
+                    }.into_any()
+                }
+            }}
+            // Editor overlay — fixed position, outside flow
+            <Show when=move || editing.get()>
+                {
                     let save = save_user.clone();
                     view! {
-                        <div class="user-editor">
-                            <div class="user-editor-name">
-                                <input
-                                    type="text"
-                                    placeholder="Thy name..."
-                                    prop:value=name_input
-                                    on:input=on_name_input
-                                    on:keydown=move |ev: web_sys::KeyboardEvent| {
-                                        if ev.key() == "Enter" { save_user(); }
-                                        if ev.key() == "Escape" { set_editing.set(false); }
-                                    }
-                                />
-                                <Show when=move || !suggestions.get().is_empty()>
-                                    <div class="user-suggestions">
-                                        <For
-                                            each=move || suggestions.get()
-                                            key=|u| u.name.clone()
-                                            let:u
-                                        >
-                                            {
-                                                let uc = u.clone();
-                                                let uc2 = u.clone();
-                                                view! {
-                                                    <div class="user-suggestion" on:mousedown=move |_| select_suggestion(uc.clone())>
-                                                        <span class="suggestion-avatar">{shape_svg(uc2.shape.clone(), uc2.color.clone(), 20.0)}</span>
-                                                        <span>{u.name.clone()}</span>
-                                                    </div>
+                        <div class="user-editor-overlay">
+                            <div class="user-editor">
+                                <div class="user-editor-name">
+                                    <input
+                                        type="text"
+                                        placeholder="Thy name..."
+                                        prop:value=name_input
+                                        on:input=on_name_input
+                                        on:keydown=move |ev: web_sys::KeyboardEvent| {
+                                            if ev.key() == "Enter" { save_user(); }
+                                            if ev.key() == "Escape" { set_editing.set(false); }
+                                        }
+                                    />
+                                    <Show when=move || !suggestions.get().is_empty()>
+                                        <div class="user-suggestions">
+                                            <For
+                                                each=move || suggestions.get()
+                                                key=|u| u.name.clone()
+                                                let:u
+                                            >
+                                                {
+                                                    let uc = u.clone();
+                                                    let uc2 = u.clone();
+                                                    view! {
+                                                        <div class="user-suggestion" on:mousedown=move |_| select_suggestion(uc.clone())>
+                                                            <span class="suggestion-avatar">{shape_svg(uc2.shape.clone(), uc2.color.clone(), 20.0)}</span>
+                                                            <span>{u.name.clone()}</span>
+                                                        </div>
+                                                    }
                                                 }
-                                            }
-                                        </For>
-                                    </div>
-                                </Show>
+                                            </For>
+                                        </div>
+                                    </Show>
+                                </div>
+                                <div class="shape-picker">
+                                    {ALL_SHAPES.iter().map(|s| {
+                                        let for_selected = s.clone();
+                                        let for_click = s.clone();
+                                        let for_svg = s.clone();
+                                        view! {
+                                            <button
+                                                class="shape-option"
+                                                class:selected=move || selected_shape.get() == for_selected
+                                                title=shape_name(s)
+                                                on:click=move |_| set_selected_shape.set(for_click.clone())
+                                            >
+                                                {shape_svg(for_svg, selected_color.get(), 24.0)}
+                                            </button>
+                                        }
+                                    }).collect::<Vec<_>>()}
+                                </div>
+                                <div class="color-picker">
+                                    {PALETTE.iter().map(|c| {
+                                        let c = c.to_string();
+                                        let c2 = c.clone();
+                                        let c3 = c.clone();
+                                        view! {
+                                            <button
+                                                class="color-option"
+                                                class:selected=move || selected_color.get() == c
+                                                style:background=c2.clone()
+                                                on:click=move |_| set_selected_color.set(c3.clone())
+                                            />
+                                        }
+                                    }).collect::<Vec<_>>()}
+                                </div>
+                                <span class="editor-preview">{move || shape_svg(selected_shape.get(), selected_color.get(), 32.0)}</span>
+                                <button class="user-save-btn" on:click=move |_| save()>"Enter"</button>
                             </div>
-                            <div class="shape-picker">
-                                {ALL_SHAPES.iter().map(|s| {
-                                    let for_selected = s.clone();
-                                    let for_click = s.clone();
-                                    let for_svg = s.clone();
-                                    view! {
-                                        <button
-                                            class="shape-option"
-                                            class:selected=move || selected_shape.get() == for_selected
-                                            title=shape_name(s)
-                                            on:click=move |_| set_selected_shape.set(for_click.clone())
-                                        >
-                                            {shape_svg(for_svg, selected_color.get(), 24.0)}
-                                        </button>
-                                    }
-                                }).collect::<Vec<_>>()}
-                            </div>
-                            <div class="color-picker">
-                                {PALETTE.iter().map(|c| {
-                                    let c = c.to_string();
-                                    let c2 = c.clone();
-                                    let c3 = c.clone();
-                                    view! {
-                                        <button
-                                            class="color-option"
-                                            class:selected=move || selected_color.get() == c
-                                            style:background=c2.clone()
-                                            on:click=move |_| set_selected_color.set(c3.clone())
-                                        />
-                                    }
-                                }).collect::<Vec<_>>()}
-                            </div>
-                            <button class="user-save-btn" on:click=move |_| save()>"Enter"</button>
                         </div>
                     }
                 }
-            >
-                {move || {
-                    if let Some(u) = user.get() {
-                        view! {
-                            <button class="user-badge" on:click=open_editor>
-                                <span class="badge-avatar">{shape_svg(u.shape.clone(), u.color.clone(), 28.0)}</span>
-                                <span class="badge-name">{u.name}</span>
-                            </button>
-                        }.into_any()
-                    } else {
-                        view! {
-                            <button class="user-badge user-badge-empty" on:click=open_editor>
-                                "Set thy identity"
-                            </button>
-                        }.into_any()
-                    }
-                }}
             </Show>
         </div>
     }
