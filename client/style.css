@@ -503,7 +503,10 @@ h2 {
     width: 26px;
     height: 26px;
     display: block;
-    filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.2));
+    filter:
+        drop-shadow(1px 0 0 white) drop-shadow(-1px 0 0 white)
+        drop-shadow(0 1px 0 white) drop-shadow(0 -1px 0 white)
+        drop-shadow(0 1px 3px rgba(0, 0, 0, 0.2));
 }
 
 .vote-avatar-me {
@@ -517,10 +520,10 @@ h2 {
 .vote-avatar-me svg {
     width: 32px;
     height: 32px;
-    filter: drop-shadow(0 0 0 white) drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
-    border-radius: 50%;
-    outline: 3px solid white;
-    outline-offset: -2px;
+    filter:
+        drop-shadow(2px 0 0 white) drop-shadow(-2px 0 0 white)
+        drop-shadow(0 2px 0 white) drop-shadow(0 -2px 0 white)
+        drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
 }
 
 .vote-avatar-me.dragging {
