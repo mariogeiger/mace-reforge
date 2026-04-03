@@ -5,6 +5,17 @@ use wasm_bindgen::JsCast;
 use crate::api::*;
 use crate::shapes::shape_svg;
 
+fn ws_url(topic_id: &str, question_id: &str) -> String {
+    let loc = web_sys::window().unwrap().location();
+    let protocol = if loc.protocol().unwrap_or_default() == "https:" {
+        "wss:"
+    } else {
+        "ws:"
+    };
+    let host = loc.host().unwrap_or_default();
+    format!("{protocol}//{host}/api/topics/{topic_id}/questions/{question_id}/ws")
+}
+
 #[component]
 pub fn OpenQuestionPage(
     topic_id: String,
@@ -18,6 +29,7 @@ pub fn OpenQuestionPage(
     let (positions, set_positions) = signal(PlanePositions { points: vec![] });
     let debounce_handle = std::cell::Cell::new(0i32);
     let (all_users, set_all_users) = signal(Vec::<User>::new());
+    let (positions_ready, set_positions_ready) = signal(false);
 
     // Reload users whenever question updates (new answers may come from new users)
     Effect::new(move || {
@@ -35,9 +47,25 @@ pub fn OpenQuestionPage(
         let q = question.get_untracked();
         if let (Some(u), Some(q)) = (user, q) {
             if let Some(existing) = q.open_answers.iter().find(|a| a.user_name == u.name) {
-                set_my_text.set(existing.text.clone());
+                let text = existing.text.clone();
+                set_my_text.set(text.clone());
+                if !text.trim().is_empty() {
+                    wasm_bindgen_futures::spawn_local(async move {
+                        #[derive(serde::Deserialize)]
+                        struct TokenResp { num_tokens: usize }
+                        #[derive(serde::Serialize)]
+                        struct TokenReq { text: String }
+                        if let Ok(resp) = api_post::<TokenResp>(
+                            "/embedding/tokenize",
+                            &TokenReq { text },
+                        ).await {
+                            set_token_count.set(Some(resp.num_tokens));
+                        }
+                    });
+                }
             } else {
                 set_my_text.set(String::new());
+                set_token_count.set(Some(0));
             }
         }
     });
@@ -58,8 +86,28 @@ pub fn OpenQuestionPage(
             .await
             {
                 set_positions.set(pos);
+                set_positions_ready.set(true);
             }
         });
+    });
+
+    // ── WebSocket connection ────────────────────────────────────────
+    let url = ws_url(&topic_id, &question_id);
+    Effect::new(move || {
+        let Ok(socket) = web_sys::WebSocket::new(&url) else {
+            return;
+        };
+        let on_message = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::MessageEvent)>::new(
+            move |ev: web_sys::MessageEvent| {
+                let Some(text) = ev.data().as_string() else { return };
+                let Ok(msg) = serde_json::from_str::<WsMsg>(&text) else { return };
+                if let WsMsg::QuestionUpdated { question } = msg {
+                    set_question.set(Some(question));
+                }
+            },
+        );
+        socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+        on_message.forget();
     });
 
     let tid = topic_id.clone();
@@ -173,6 +221,7 @@ pub fn OpenQuestionPage(
                     }}
                 </div>
                 {move || {
+                    if !positions_ready.get() { return Vec::new() }
                     let q = question.get();
                     let Some(q) = q.as_ref() else { return Vec::new() };
                     let pos = positions.get();

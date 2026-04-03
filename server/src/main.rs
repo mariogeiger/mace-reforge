@@ -256,6 +256,12 @@ async fn add_open_answer(
         return HttpResponse::NotFound().finish();
     };
 
+    // Broadcast update to other clients
+    let question_id = q.id.clone();
+    if let Ok(msg) = serde_json::to_string(&WsMsg::QuestionUpdated { question: q.clone() }) {
+        state.broadcast(&question_id, &msg);
+    }
+
     // Embed in background (don't block the response)
     let qid = q.id.clone();
     let user_name = body.user_name.clone();
