@@ -461,7 +461,7 @@ h2 {
     font-family: Georgia, "Times New Roman", serif;
     font-size: 1.1rem;
     color: var(--brown);
-    min-height: 1.6em;
+    min-height: 3.3em;
     margin-bottom: 1.5rem;
     font-style: italic;
 }
@@ -636,6 +636,7 @@ h2 {
     cursor: grab;
     pointer-events: auto;
     transition: none;
+    will-change: left, top;
 }
 
 .vote-avatar-me svg {
@@ -653,6 +654,9 @@ h2 {
 
 .vote-avatar-me.dragging svg {
     transform: scale(1.15);
+    filter:
+        drop-shadow(1px 0 0 white) drop-shadow(-1px 0 0 white)
+        drop-shadow(0 1px 0 white) drop-shadow(0 -1px 0 white);
 }
 
 /* ── Open Question: 2D Plane ─────────────────────────────────────── */
