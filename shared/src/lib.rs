@@ -19,9 +19,19 @@ pub struct Question {
     /// Closed question: fixed answer positions around a circle
     #[serde(default)]
     pub answers: Vec<String>,
+    /// Closed question: user vote positions on the circle
+    #[serde(default)]
+    pub votes: Vec<Vote>,
     /// Open question: free-text answers
     #[serde(default)]
     pub open_answers: Vec<OpenAnswer>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Vote {
+    pub user_name: String,
+    pub x: f64,
+    pub y: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +93,13 @@ pub struct CreateQuestion {
 pub struct AddAnswer {
     pub text: String,
     pub index: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CastVote {
+    pub user_name: String,
+    pub x: f64,
+    pub y: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

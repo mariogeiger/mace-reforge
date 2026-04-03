@@ -1,8 +1,8 @@
 use actix_files::Files;
 use actix_web::{App, HttpResponse, HttpServer, middleware, web};
 use mace_reforge_shared::{
-    AddAnswer, AddOpenAnswer, CreateQuestion, CreateTopic, PlanePoint, PlanePositions, Question,
-    Topic, TopicWithCount, User,
+    AddAnswer, AddOpenAnswer, CastVote, CreateQuestion, CreateTopic, PlanePoint, PlanePositions,
+    Question, Topic, TopicWithCount, User, Vote,
 };
 use std::collections::HashMap;
 use std::net::TcpListener;
@@ -131,6 +131,7 @@ async fn create_question(
             text: body.text.clone(),
             kind: body.kind.clone(),
             answers: vec![],
+            votes: vec![],
             open_answers: vec![],
         };
         let resp = HttpResponse::Ok().json(&question);
@@ -153,6 +154,32 @@ async fn add_answer(
         };
         let index = body.index.min(q.answers.len());
         q.answers.insert(index, body.text.clone());
+        HttpResponse::Ok().json(q.clone())
+    })
+}
+
+// ── Votes (closed) ──────────────────────────────────────────────────
+
+async fn cast_vote(
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+    body: web::Json<CastVote>,
+) -> HttpResponse {
+    let (_topic_id, question_id) = path.into_inner();
+    state.with_db_save(|db| {
+        let Some(q) = db.questions.iter_mut().find(|q| q.id == question_id) else {
+            return HttpResponse::NotFound().finish();
+        };
+        if let Some(existing) = q.votes.iter_mut().find(|v| v.user_name == body.user_name) {
+            existing.x = body.x;
+            existing.y = body.y;
+        } else {
+            q.votes.push(Vote {
+                user_name: body.user_name.clone(),
+                x: body.x,
+                y: body.y,
+            });
+        }
         HttpResponse::Ok().json(q.clone())
     })
 }
@@ -616,6 +643,11 @@ async fn main() -> std::io::Result<()> {
             .route(
                 "/api/topics/{topic_id}/questions/{question_id}/answers",
                 web::post().to(add_answer),
+            )
+            // Votes (closed)
+            .route(
+                "/api/topics/{topic_id}/questions/{question_id}/votes",
+                web::post().to(cast_vote),
             )
             // Answers (open)
             .route(
