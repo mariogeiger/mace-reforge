@@ -79,6 +79,19 @@ fn parse_hash() -> Route {
     }
 }
 
+const STAR_PATH: &str = "M 211.88,0 C 211.88,172.25 173.19,210.94 0.94,210.94 173.19,210.94 211.88,249.63 211.88,421.88 211.88,249.63 250.57,210.94 422.82,210.94 250.57,210.94 211.88,172.25 211.88,0 Z";
+
+#[component]
+fn Star(class_name: &'static str) -> impl IntoView {
+    view! {
+        <div class=class_name>
+            <svg viewBox="0 0 423 422" xmlns="http://www.w3.org/2000/svg">
+                <path d=STAR_PATH fill="currentColor"/>
+            </svg>
+        </div>
+    }
+}
+
 // ── Entry ────────────────────────────────────────────────────────────
 
 #[wasm_bindgen(start)]
@@ -107,7 +120,7 @@ fn App() -> impl IntoView {
         <header class="site-header">
             <a href="#/" class="logo">
                 <svg class="star" viewBox="0 0 423 422" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M 211.88,0 C 211.88,172.25 173.19,210.94 0.94,210.94 173.19,210.94 211.88,249.63 211.88,421.88 211.88,249.63 250.57,210.94 422.82,210.94 250.57,210.94 211.88,172.25 211.88,0 Z" fill="currentColor"/>
+                    <path d=STAR_PATH fill="currentColor"/>
                 </svg>
                 <span class="logo-text">"MACE-REFORGE"</span>
             </a>
@@ -193,6 +206,7 @@ fn HomePage() -> impl IntoView {
                     let:topic
                 >
                     <a class="topic-card" href=format!("#/topic/{}", topic.id)>
+                        <Star class_name="card-star"/>
                         <span class="card-title">{topic.title}</span>
                         <span class="card-count">{topic.question_count}" questions within"</span>
                     </a>

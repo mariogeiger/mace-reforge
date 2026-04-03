@@ -5,6 +5,7 @@
     --brown-dark: #5c3d1e;
     --brown-faint: rgba(128, 87, 43, 0.08);
     --brown-border: rgba(128, 87, 43, 0.18);
+    --brown-line: #80572B;
     --text: #3d2a14;
     --text-muted: #8c7560;
     --card-bg: rgba(255, 255, 255, 0.5);
@@ -165,7 +166,7 @@ h2 {
 
 .topic-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
     gap: 1.2rem;
 }
 
@@ -190,10 +191,10 @@ h2 {
 }
 
 .card-star {
-    width: 36px;
-    height: 36px;
+    width: 32px;
+    height: 32px;
     color: var(--brown);
-    opacity: 0.6;
+    opacity: 0.5;
     transition: opacity 0.15s;
 }
 
