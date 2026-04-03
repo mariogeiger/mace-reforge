@@ -496,7 +496,7 @@ h2 {
     z-index: 5;
     pointer-events: none;
     opacity: 0.7;
-    transition: left 0.6s ease-in-out, top 0.6s ease-in-out;
+    transition: none;
 }
 
 .vote-avatar svg {
