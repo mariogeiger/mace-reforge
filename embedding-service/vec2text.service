@@ -1,0 +1,15 @@
+[Unit]
+Description=vec2text embedding service
+
+[Service]
+Type=notify
+ExecStart=/home/mario/git/mace-reforge/embedding-service/.venv/bin/python /home/mario/git/mace-reforge/embedding-service/service.py
+WorkingDirectory=/home/mario/git/mace-reforge/embedding-service
+Restart=on-failure
+WatchdogSec=30
+TimeoutStartSec=60
+TimeoutStopSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
