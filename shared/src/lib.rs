@@ -120,3 +120,14 @@ pub struct PlanePoint {
     pub x: f64,
     pub y: f64,
 }
+
+// ── WebSocket messages ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum WsMsg {
+    /// Ephemeral position update during drag (not persisted).
+    VoteMoved { user_name: String, x: f64, y: f64 },
+    /// Full question state after a persistent change.
+    QuestionUpdated { question: Question },
+}

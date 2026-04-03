@@ -88,11 +88,35 @@ fn opinion(q: &Question, x: f64, y: f64) -> String {
     band.replace("{}", &q.answers[scored[0].0])
 }
 
+// ── WebSocket helpers ───────────────────────────────────────────────
+
+fn ws_url(topic_id: &str, question_id: &str) -> String {
+    let loc = web_sys::window().unwrap().location();
+    let protocol = if loc.protocol().unwrap_or_default() == "https:" {
+        "wss:"
+    } else {
+        "ws:"
+    };
+    let host = loc.host().unwrap_or_default();
+    format!("{protocol}//{host}/api/topics/{topic_id}/questions/{question_id}/ws")
+}
+
+fn ws_send(ws: &ReadSignal<Option<web_sys::WebSocket>>, msg: &WsMsg) {
+    if let Some(socket) = ws.get_untracked() {
+        if socket.ready_state() == 1 {
+            if let Ok(json) = serde_json::to_string(msg) {
+                let _ = socket.send_with_str(&json);
+            }
+        }
+    }
+}
+
 // ── Component ───────────────────────────────────────────────────────
 
 #[component]
 pub fn ClosedQuestionPage(
     topic_id: String,
+    question_id: String,
     question: ReadSignal<Option<Question>>,
     set_question: WriteSignal<Option<Question>>,
     current_user: ReadSignal<Option<User>>,
@@ -102,6 +126,7 @@ pub fn ClosedQuestionPage(
     let (dragging, set_dragging) = signal(false);
     let (did_drag, set_did_drag) = signal(false);
     let (all_users, set_all_users) = signal(Vec::<User>::new());
+    let (ws, set_ws) = signal(Option::<web_sys::WebSocket>::None);
 
     // ── Effects ─────────────────────────────────────────────────────
 
@@ -123,6 +148,61 @@ pub fn ClosedQuestionPage(
                 set_knob_x.set(0.0);
                 set_knob_y.set(0.0);
             }
+        }
+    });
+
+    // ── WebSocket connection ────────────────────────────────────────
+
+    let url = ws_url(&topic_id, &question_id);
+    Effect::new(move || {
+        let Ok(socket) = web_sys::WebSocket::new(&url) else {
+            return;
+        };
+
+        let on_message = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::MessageEvent)>::new(
+            move |ev: web_sys::MessageEvent| {
+                let Some(text) = ev.data().as_string() else {
+                    return;
+                };
+                let Ok(msg) = serde_json::from_str::<WsMsg>(&text) else {
+                    return;
+                };
+                let my_name = current_user
+                    .get_untracked()
+                    .map(|u| u.name)
+                    .unwrap_or_default();
+                match msg {
+                    WsMsg::VoteMoved { user_name, x, y } => {
+                        if user_name != my_name {
+                            set_question.update(|q| {
+                                if let Some(q) = q {
+                                    if let Some(v) =
+                                        q.votes.iter_mut().find(|v| v.user_name == user_name)
+                                    {
+                                        v.x = x;
+                                        v.y = y;
+                                    } else {
+                                        q.votes.push(Vote { user_name, x, y });
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    WsMsg::QuestionUpdated { question } => {
+                        set_question.set(Some(question));
+                    }
+                }
+            },
+        );
+        socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+        on_message.forget();
+
+        set_ws.set(Some(socket));
+    });
+
+    on_cleanup(move || {
+        if let Some(socket) = ws.get_untracked() {
+            let _ = socket.close();
         }
     });
 
@@ -215,6 +295,18 @@ pub fn ClosedQuestionPage(
         let (nx, ny) = to_normalised(ev.client_x() as f64, ev.client_y() as f64, &el);
         set_knob_x.set(nx);
         set_knob_y.set(ny);
+
+        // Broadcast live position to other clients
+        if let Some(user) = current_user.get_untracked() {
+            ws_send(
+                &ws,
+                &WsMsg::VoteMoved {
+                    user_name: user.name,
+                    x: nx,
+                    y: ny,
+                },
+            );
+        }
     };
 
     let on_pointerup = move |ev: web_sys::PointerEvent| {

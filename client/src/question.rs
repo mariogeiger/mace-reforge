@@ -42,6 +42,7 @@ pub fn QuestionPage(
                 QuestionKind::Closed => view! {
                     <ClosedQuestionPage
                         topic_id=tid2.clone()
+                        question_id=qid2.clone()
                         question=question
                         set_question=set_question
                         current_user=current_user

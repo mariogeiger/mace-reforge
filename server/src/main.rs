@@ -1,8 +1,9 @@
 use actix_files::Files;
 use actix_web::{App, HttpResponse, HttpServer, middleware, web};
+use futures_util::StreamExt as _;
 use mace_reforge_shared::{
     AddAnswer, AddOpenAnswer, CastVote, CreateQuestion, CreateTopic, PlanePoint, PlanePositions,
-    Question, Topic, TopicWithCount, User, Vote,
+    Question, Topic, TopicWithCount, User, Vote, WsMsg,
 };
 use std::collections::HashMap;
 use std::net::TcpListener;
@@ -48,6 +49,8 @@ struct AppState {
     db: Mutex<Db>,
     /// In-memory embedding cache: (question_id, user_name) → embedding vector
     embeddings: Mutex<HashMap<(String, String), Vec<f64>>>,
+    /// WebSocket broadcast channels per question_id
+    rooms: Mutex<HashMap<String, tokio::sync::broadcast::Sender<String>>>,
 }
 
 impl AppState {
@@ -60,6 +63,22 @@ impl AppState {
         let result = f(&mut db);
         save_db(&db);
         result
+    }
+
+    fn subscribe(&self, question_id: &str) -> tokio::sync::broadcast::Receiver<String> {
+        self.rooms
+            .lock()
+            .unwrap()
+            .entry(question_id.to_string())
+            .or_insert_with(|| tokio::sync::broadcast::channel(64).0)
+            .subscribe()
+    }
+
+    fn broadcast(&self, question_id: &str, msg: &str) {
+        let rooms = self.rooms.lock().unwrap();
+        if let Some(tx) = rooms.get(question_id) {
+            let _ = tx.send(msg.to_string());
+        }
     }
 }
 
@@ -148,14 +167,24 @@ async fn add_answer(
     body: web::Json<AddAnswer>,
 ) -> HttpResponse {
     let (_topic_id, question_id) = path.into_inner();
-    state.with_db_save(|db| {
-        let Some(q) = db.questions.iter_mut().find(|q| q.id == question_id) else {
-            return HttpResponse::NotFound().finish();
+    let qid = question_id.clone();
+    let result = state.with_db_save(|db| {
+        let Some(q) = db.questions.iter_mut().find(|q| q.id == qid) else {
+            return None;
         };
         let index = body.index.min(q.answers.len());
         q.answers.insert(index, body.text.clone());
-        HttpResponse::Ok().json(q.clone())
-    })
+        Some(q.clone())
+    });
+    match result {
+        Some(q) => {
+            if let Ok(msg) = serde_json::to_string(&WsMsg::QuestionUpdated { question: q.clone() }) {
+                state.broadcast(&question_id, &msg);
+            }
+            HttpResponse::Ok().json(q)
+        }
+        None => HttpResponse::NotFound().finish(),
+    }
 }
 
 // ── Votes (closed) ──────────────────────────────────────────────────
@@ -166,9 +195,10 @@ async fn cast_vote(
     body: web::Json<CastVote>,
 ) -> HttpResponse {
     let (_topic_id, question_id) = path.into_inner();
-    state.with_db_save(|db| {
-        let Some(q) = db.questions.iter_mut().find(|q| q.id == question_id) else {
-            return HttpResponse::NotFound().finish();
+    let qid = question_id.clone();
+    let result = state.with_db_save(|db| {
+        let Some(q) = db.questions.iter_mut().find(|q| q.id == qid) else {
+            return None;
         };
         if let Some(existing) = q.votes.iter_mut().find(|v| v.user_name == body.user_name) {
             existing.x = body.x;
@@ -180,8 +210,17 @@ async fn cast_vote(
                 y: body.y,
             });
         }
-        HttpResponse::Ok().json(q.clone())
-    })
+        Some(q.clone())
+    });
+    match result {
+        Some(q) => {
+            if let Ok(msg) = serde_json::to_string(&WsMsg::QuestionUpdated { question: q.clone() }) {
+                state.broadcast(&question_id, &msg);
+            }
+            HttpResponse::Ok().json(q)
+        }
+        None => HttpResponse::NotFound().finish(),
+    }
 }
 
 // ── Answers (open) ──────────────────────────────────────────────────
@@ -607,6 +646,48 @@ fn unix_secs_to_ymdh(secs: u64) -> (u64, u64, u64, u64) {
     (y, (m + 1) as u64, (remaining + 1) as u64, hour)
 }
 
+// ── WebSocket ──────────────────────────────────────────────────────
+
+async fn question_ws(
+    req: actix_web::HttpRequest,
+    body: web::Payload,
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+) -> Result<HttpResponse, actix_web::Error> {
+    let (response, mut session, msg_stream) = actix_ws::handle(&req, body)?;
+    let (_topic_id, question_id) = path.into_inner();
+    let mut rx = state.subscribe(&question_id);
+    let mut ws = msg_stream;
+
+    actix_web::rt::spawn(async move {
+        loop {
+            tokio::select! {
+                msg = ws.next() => {
+                    match msg {
+                        Some(Ok(actix_ws::Message::Text(text))) => {
+                            state.broadcast(&question_id, &text);
+                        }
+                        Some(Ok(actix_ws::Message::Ping(data))) => {
+                            let _ = session.pong(&data).await;
+                        }
+                        _ => break,
+                    }
+                }
+                bcast = rx.recv() => {
+                    match bcast {
+                        Ok(text) => {
+                            if session.text(text).await.is_err() { break; }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+        }
+    });
+
+    Ok(response)
+}
+
 // ── Main ────────────────────────────────────────────────────────────
 
 #[actix_web::main]
@@ -616,6 +697,7 @@ async fn main() -> std::io::Result<()> {
     let state = web::Data::new(AppState {
         db: Mutex::new(load_db()),
         embeddings: Mutex::new(HashMap::new()),
+        rooms: Mutex::new(HashMap::new()),
     });
 
     log::info!("Server running at http://localhost:4849");
@@ -648,6 +730,11 @@ async fn main() -> std::io::Result<()> {
             .route(
                 "/api/topics/{topic_id}/questions/{question_id}/votes",
                 web::post().to(cast_vote),
+            )
+            // WebSocket (real-time sync)
+            .route(
+                "/api/topics/{topic_id}/questions/{question_id}/ws",
+                web::get().to(question_ws),
             )
             // Answers (open)
             .route(

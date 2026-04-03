@@ -8,8 +8,6 @@ pub fn TopicPage(topic_id: String) -> impl IntoView {
     let (topic, set_topic) = signal(Option::<TopicWithCount>::None);
     let (questions, set_questions) = signal(Vec::<Question>::new());
     let (new_text, set_new_text) = signal(String::new());
-    let (new_kind, set_new_kind) = signal(QuestionKind::Closed);
-
     let tid = topic_id.clone();
     Effect::new(move || {
         let tid = tid.clone();
@@ -24,14 +22,13 @@ pub fn TopicPage(topic_id: String) -> impl IntoView {
     });
 
     let tid2 = topic_id.clone();
-    let do_create = move || {
+    let do_create = move |kind: QuestionKind| {
         let text = new_text.get_untracked();
         if text.trim().is_empty() {
             return;
         }
         set_new_text.set(String::new());
         let tid = tid2.clone();
-        let kind = new_kind.get_untracked();
         wasm_bindgen_futures::spawn_local(async move {
             match api_post::<Question>(
                 &format!("/api/topics/{tid}/questions"),
@@ -48,12 +45,8 @@ pub fn TopicPage(topic_id: String) -> impl IntoView {
     let do_create_k = do_create.clone();
     let on_keydown = move |ev: web_sys::KeyboardEvent| {
         if ev.key() == "Enter" {
-            do_create_k();
+            do_create_k(QuestionKind::Closed);
         }
-    };
-
-    let on_click = move |_: web_sys::MouseEvent| {
-        do_create();
     };
 
     let tid3 = topic_id.clone();
@@ -70,19 +63,13 @@ pub fn TopicPage(topic_id: String) -> impl IntoView {
                     on:input=move |ev| set_new_text.set(event_target_value(&ev))
                     on:keydown=on_keydown
                 />
-                <div class="kind-toggle">
-                    <button
-                        class="kind-btn"
-                        class:active=move || new_kind.get() == QuestionKind::Closed
-                        on:click=move |_| set_new_kind.set(QuestionKind::Closed)
-                    >"Closed"</button>
-                    <button
-                        class="kind-btn"
-                        class:active=move || new_kind.get() == QuestionKind::Open
-                        on:click=move |_| set_new_kind.set(QuestionKind::Open)
-                    >"Open"</button>
-                </div>
-                <button on:click=on_click>"Propose"</button>
+                {
+                    let do_create = do_create.clone();
+                    view! {
+                        <button on:click=move |_| do_create(QuestionKind::Closed)>"Closed"</button>
+                    }
+                }
+                <button on:click=move |_| do_create(QuestionKind::Open)>"Open"</button>
             </div>
             <div class="question-list">
                 <For
