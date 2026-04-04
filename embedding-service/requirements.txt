@@ -1,4 +1,3 @@
-vec2text
 transformers>=4.36,<5
 sentence-transformers>=3,<4
 fastapi

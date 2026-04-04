@@ -1,11 +1,10 @@
 """
-vec2text embedding service.
+Embedding service using GTR-T5-base (768-dim embeddings).
 
 Endpoints:
-  POST /embed     { "texts": ["..."] }              → { "embeddings": [[...], ...] }
-  POST /invert    { "embeddings": [[...]], "num_steps": 20 } → { "texts": ["..."] }
-  POST /tokenize  { "text": "..." }                 → { "num_tokens": 42 }
-  GET  /health                                       → { "status": "ok", "models_loaded": bool }
+  POST /embed     { "texts": ["..."] }   → { "embeddings": [[...], ...] }
+  POST /tokenize  { "text": "..." }      → { "num_tokens": 42 }
+  GET  /health                            → { "status": "ok", "models_loaded": bool }
 
 Models are loaded lazily on first request and unloaded after IDLE_TIMEOUT_S
 seconds of inactivity to free GPU memory.
@@ -15,6 +14,7 @@ import logging
 import threading
 import time
 from contextlib import asynccontextmanager
+
 import sdnotify
 import torch
 import uvicorn
@@ -29,7 +29,7 @@ IDLE_TIMEOUT_S = 3600  # 1 hour
 WATCHDOG_INTERVAL_S = 15
 PORT = 4850
 
-logger = logging.getLogger("vec2text-service")
+logger = logging.getLogger("embedding-service")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 # ---------------------------------------------------------------------------
@@ -37,12 +37,17 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 # ---------------------------------------------------------------------------
 
 
+def _mean_pool(hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+    """Mean pooling over non-padded tokens."""
+    mask = attention_mask.unsqueeze(-1).float()
+    return (hidden_state * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-9)
+
+
 class ModelHolder:
     def __init__(self):
         self._lock = threading.Lock()
         self._encoder = None
         self._tokenizer = None
-        self._corrector = None
         self._last_used: float = 0.0
 
     @property
@@ -50,12 +55,10 @@ class ModelHolder:
         return self._encoder is not None
 
     def _load(self):
-        import vec2text
         from transformers import AutoModel, AutoTokenizer
 
         logger.info("Loading models into GPU memory...")
         t0 = time.monotonic()
-        self._corrector = vec2text.load_pretrained_corrector("gtr-base")
         self._encoder = AutoModel.from_pretrained(
             "sentence-transformers/gtr-t5-base"
         ).encoder.to("cuda")
@@ -68,7 +71,6 @@ class ModelHolder:
         logger.info("Unloading models from GPU memory...")
         self._encoder = None
         self._tokenizer = None
-        self._corrector = None
         torch.cuda.empty_cache()
         logger.info("GPU memory freed")
 
@@ -85,8 +87,6 @@ class ModelHolder:
 
     def embed(self, texts: list[str]) -> torch.Tensor:
         self.ensure_loaded()
-        import vec2text
-
         inputs = self._tokenizer(
             texts,
             return_tensors="pt",
@@ -99,19 +99,7 @@ class ModelHolder:
                 input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
             )
-            return vec2text.models.model_utils.mean_pool(
-                out.last_hidden_state, inputs["attention_mask"]
-            )
-
-    def invert(self, embeddings: torch.Tensor, num_steps: int) -> list[str]:
-        self.ensure_loaded()
-        import vec2text
-
-        return vec2text.invert_embeddings(
-            embeddings=embeddings.cuda(),
-            corrector=self._corrector,
-            num_steps=num_steps,
-        )
+            return _mean_pool(out.last_hidden_state, inputs["attention_mask"])
 
     def tokenize_count(self, text: str) -> int:
         self.ensure_loaded()
@@ -130,7 +118,7 @@ _shutdown = threading.Event()
 def _idle_checker():
     """Periodically check if models should be unloaded."""
     while not _shutdown.is_set():
-        _shutdown.wait(60)  # check every minute
+        _shutdown.wait(60)
         models.maybe_unload()
 
 
@@ -159,7 +147,7 @@ async def lifespan(app: FastAPI):
     _shutdown.set()
 
 
-app = FastAPI(title="vec2text", lifespan=lifespan)
+app = FastAPI(title="embedding-service", lifespan=lifespan)
 
 
 # -- Request/Response models ------------------------------------------------
@@ -171,15 +159,6 @@ class EmbedRequest(BaseModel):
 
 class EmbedResponse(BaseModel):
     embeddings: list[list[float]]
-
-
-class InvertRequest(BaseModel):
-    embeddings: list[list[float]]
-    num_steps: int = 20
-
-
-class InvertResponse(BaseModel):
-    texts: list[str]
 
 
 class TokenizeRequest(BaseModel):
@@ -209,15 +188,6 @@ async def embed(req: EmbedRequest):
         raise HTTPException(400, "texts must be non-empty")
     embs = models.embed(req.texts)
     return EmbedResponse(embeddings=embs.cpu().tolist())
-
-
-@app.post("/invert", response_model=InvertResponse)
-async def invert(req: InvertRequest):
-    if not req.embeddings:
-        raise HTTPException(400, "embeddings must be non-empty")
-    tensor = torch.tensor(req.embeddings, dtype=torch.float32)
-    texts = models.invert(tensor, num_steps=req.num_steps)
-    return InvertResponse(texts=[t.strip() for t in texts])
 
 
 @app.post("/tokenize", response_model=TokenizeResponse)

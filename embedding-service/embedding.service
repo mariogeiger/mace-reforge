@@ -1,5 +1,5 @@
 [Unit]
-Description=vec2text embedding service
+Description=GTR-T5 embedding service
 
 [Service]
 Type=notify
