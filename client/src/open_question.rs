@@ -26,8 +26,18 @@ pub fn OpenQuestionPage(
 ) -> impl IntoView {
     let (my_text, set_my_text) = signal(String::new());
     let (token_count, set_token_count) = signal(Option::<usize>::None);
+    let (max_tokens, set_max_tokens) = signal(512usize);
     let (positions, set_positions) = signal(PlanePositions { points: vec![] });
     let debounce_handle = std::cell::Cell::new(0i32);
+
+    // Fetch max token limit from embedding service
+    wasm_bindgen_futures::spawn_local(async move {
+        #[derive(serde::Deserialize)]
+        struct InfoResp { max_tokens: usize }
+        if let Ok(resp) = api_get::<InfoResp>("/embedding/info").await {
+            set_max_tokens.set(resp.max_tokens);
+        }
+    });
     let (all_users, set_all_users) = signal(Vec::<User>::new());
     let (positions_ready, set_positions_ready) = signal(false);
 
@@ -396,10 +406,13 @@ pub fn OpenQuestionPage(
                         debounce_handle.set(handle);
                     }
                 />
-                <div class="token-counter" class:over-limit=move || token_count.get().map(|n| n > 512).unwrap_or(false)>
-                    {move || match token_count.get() {
-                        Some(n) => format!("{n}/512 tokens"),
-                        None => "0/512 tokens".to_string(),
+                <div class="token-counter" class:over-limit=move || token_count.get().map(|n| n > max_tokens.get()).unwrap_or(false)>
+                    {move || {
+                        let limit = max_tokens.get();
+                        match token_count.get() {
+                            Some(n) => format!("{n}/{limit} tokens"),
+                            None => format!("0/{limit} tokens"),
+                        }
                     }}
                 </div>
             </div>

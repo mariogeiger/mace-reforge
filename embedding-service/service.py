@@ -1,9 +1,10 @@
 """
-Embedding service using BGE-large-en-v1.5 (1024-dim embeddings).
+Embedding service using BGE-M3 (1024-dim embeddings).
 
 Endpoints:
   POST /embed     { "texts": ["..."] }   → { "embeddings": [[...], ...] }
   POST /tokenize  { "text": "..." }      → { "num_tokens": 42 }
+  GET  /info                              → { "max_tokens": 8192 }
   GET  /health                            → { "status": "ok", "models_loaded": bool }
 
 Models are loaded lazily on first request and unloaded after IDLE_TIMEOUT_S
@@ -11,6 +12,7 @@ seconds of inactivity to free GPU memory.
 """
 
 import logging
+import pathlib
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -18,20 +20,43 @@ from contextlib import asynccontextmanager
 import sdnotify
 import torch
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
-MODEL_NAME = "BAAI/bge-large-en-v1.5"
+MODEL_NAME = "BAAI/bge-m3"
+MAX_TOKENS = 8192
 IDLE_TIMEOUT_S = 3600  # 1 hour
 WATCHDOG_INTERVAL_S = 15
 PORT = 4850
+API_KEYS_FILE = pathlib.Path(__file__).parent / "api_keys.txt"
 
 logger = logging.getLogger("embedding-service")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
+
+def _load_api_keys() -> set[str]:
+    if not API_KEYS_FILE.exists():
+        return set()
+    return {line.strip() for line in API_KEYS_FILE.read_text().splitlines() if line.strip() and not line.startswith("#")}
+
+
+async def require_key(request: Request):
+    client = request.client
+    if client and client.host == "127.0.0.1":
+        return
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(401, "Missing API key")
+    keys = _load_api_keys()
+    if not keys or auth[7:] not in keys:
+        raise HTTPException(401, "Invalid API key")
 
 # ---------------------------------------------------------------------------
 # Model holder with lazy loading and idle unloading
@@ -145,6 +170,10 @@ class TokenizeResponse(BaseModel):
     num_tokens: int
 
 
+class InfoResponse(BaseModel):
+    max_tokens: int
+
+
 class HealthResponse(BaseModel):
     status: str
     models_loaded: bool
@@ -158,7 +187,12 @@ async def health():
     return HealthResponse(status="ok", models_loaded=models.loaded)
 
 
-@app.post("/embed", response_model=EmbedResponse)
+@app.get("/info", response_model=InfoResponse)
+async def info():
+    return InfoResponse(max_tokens=MAX_TOKENS)
+
+
+@app.post("/embed", response_model=EmbedResponse, dependencies=[Depends(require_key)])
 async def embed(req: EmbedRequest):
     if not req.texts:
         raise HTTPException(400, "texts must be non-empty")
@@ -168,7 +202,7 @@ async def embed(req: EmbedRequest):
     )
 
 
-@app.post("/tokenize", response_model=TokenizeResponse)
+@app.post("/tokenize", response_model=TokenizeResponse, dependencies=[Depends(require_key)])
 async def tokenize(req: TokenizeRequest):
     count = models.tokenize_count(req.text)
     return TokenizeResponse(num_tokens=count)

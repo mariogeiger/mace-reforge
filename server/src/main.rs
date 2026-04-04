@@ -518,9 +518,10 @@ async fn embedding_proxy(
     let path = req.match_info().get("tail").unwrap_or("");
     let url = format!("{EMBEDDING_SERVICE}/{path}");
     let client = awc::Client::default();
-    let fwd = client
-        .post(&url)
-        .insert_header(("Content-Type", "application/json"));
+    let fwd = match *req.method() {
+        actix_web::http::Method::GET => client.get(&url).insert_header(("Content-Type", "application/json")),
+        _ => client.post(&url).insert_header(("Content-Type", "application/json")),
+    };
     match fwd.send_body(body).await {
         Ok(mut resp) => {
             let status = resp.status();
@@ -959,8 +960,8 @@ async fn main() -> std::io::Result<()> {
             // Users
             .route("/api/users", web::get().to(get_users))
             .route("/api/users", web::post().to(upsert_user))
-            // Embedding proxy (for tokenize only)
-            .route("/embedding/{tail:.*}", web::post().to(embedding_proxy))
+            // Embedding proxy
+            .route("/embedding/{tail:.*}", web::to(embedding_proxy))
             // Static files
             .service(Files::new("/", "./client/dist").index_file("index.html"))
     })

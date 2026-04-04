@@ -1,6 +1,6 @@
 # Embedding Service
 
-Text embedding service using BGE-large-en-v1.5 (1024-dim embeddings).
+Text embedding service using BGE-M3 (1024-dim embeddings).
 
 Models are loaded lazily on first request and unloaded after 1 hour of inactivity to free GPU memory.
 
@@ -13,9 +13,19 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## Authentication
+
+POST endpoints require a Bearer token. Create `api_keys.txt` (one key per line, `#` comments allowed):
+
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(32))" >> api_keys.txt
+```
+
+Localhost requests (127.0.0.1) bypass auth, so the Rust server doesn't need a key.
+
 ## API
 
-Port: **4850**
+Port: **4850** / Public: **https://embedding.geiger.ink**
 
 ### `GET /health`
 
@@ -23,24 +33,32 @@ Port: **4850**
 { "status": "ok", "models_loaded": false }
 ```
 
+### `GET /info`
+
+```json
+{ "max_tokens": 8192 }
+```
+
 ### `POST /embed`
 
 ```bash
-curl -X POST http://127.0.0.1:4850/embed \
+curl -X POST https://embedding.geiger.ink/embed \
+  -H 'Authorization: Bearer <key>' \
   -H 'Content-Type: application/json' \
   -d '{"texts": ["hello world", "another sentence"]}'
 ```
 
 ```json
-{ "embeddings": [[0.15, 0.09, ...], [0.06, 0.07, ...]] }
+{ "embeddings": [[0.034345, 0.033161, ...], [0.021913, -0.037134, ...]] }
 ```
 
-Each embedding is a 1024-dim float vector. Latency: ~5ms per text.
+Each embedding is a 1024-dim float vector. Latency: ~8ms per text.
 
 ### `POST /tokenize`
 
 ```bash
-curl -X POST http://127.0.0.1:4850/tokenize \
+curl -X POST https://embedding.geiger.ink/tokenize \
+  -H 'Authorization: Bearer <key>' \
   -H 'Content-Type: application/json' \
   -d '{"text": "hello world"}'
 ```
@@ -49,7 +67,7 @@ curl -X POST http://127.0.0.1:4850/tokenize \
 { "num_tokens": 3 }
 ```
 
-The embedding model truncates at 512 tokens (~350 words).
+The embedding model truncates at 8192 tokens.
 
 ## Systemd
 
