@@ -31,6 +31,12 @@ pub fn OpenQuestionPage(
     let (all_users, set_all_users) = signal(Vec::<User>::new());
     let (positions_ready, set_positions_ready) = signal(false);
 
+    // Axis controls: local editing state
+    let (x_neg, set_x_neg) = signal(String::new());
+    let (x_pos, set_x_pos) = signal(String::new());
+    let (y_neg, set_y_neg) = signal(String::new());
+    let (y_pos, set_y_pos) = signal(String::new());
+
     // Reload users whenever question updates (new answers may come from new users)
     Effect::new(move || {
         let _ = question.get();
@@ -70,25 +76,85 @@ pub fn OpenQuestionPage(
         }
     });
 
-    // Fetch positions whenever question updates (embeddings computed server-side)
+    // Sync axis inputs from server state
+    Effect::new(move || {
+        let q = question.get();
+        if let Some(q) = q.as_ref() {
+            match &q.x_axis {
+                Some((neg, pos)) => {
+                    set_x_neg.set(neg.clone());
+                    set_x_pos.set(pos.clone());
+                }
+                None => {
+                    set_x_neg.set(String::new());
+                    set_x_pos.set(String::new());
+                }
+            }
+            match &q.y_axis {
+                Some((neg, pos)) => {
+                    set_y_neg.set(neg.clone());
+                    set_y_pos.set(pos.clone());
+                }
+                None => {
+                    set_y_neg.set(String::new());
+                    set_y_pos.set(String::new());
+                }
+            }
+        }
+    });
+
+    // Fetch positions whenever question or local axes change (debounced)
     let tid_pos = topic_id.clone();
     let qid_pos = question_id.clone();
+    let pos_debounce = std::cell::Cell::new(0i32);
     Effect::new(move || {
         let _ = question.get();
+        let xn = x_neg.get();
+        let xp = x_pos.get();
+        let yn = y_neg.get();
+        let yp = y_pos.get();
+
+        let prev = pos_debounce.get();
+        if prev != 0 {
+            web_sys::window().unwrap().clear_timeout_with_handle(prev);
+        }
+
         let tid = tid_pos.clone();
         let qid = qid_pos.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            // Small delay to let server-side background embedding finish
-            gloo_timers::future::TimeoutFuture::new(200).await;
-            if let Ok(pos) = api_get::<PlanePositions>(
-                &format!("/api/topics/{tid}/questions/{qid}/positions"),
-            )
-            .await
-            {
-                set_positions.set(pos);
-                set_positions_ready.set(true);
-            }
+        let cb = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+            let x_axis = if xn.trim().is_empty() || xp.trim().is_empty() {
+                None
+            } else {
+                Some((xn.clone(), xp.clone()))
+            };
+            let y_axis = if yn.trim().is_empty() || yp.trim().is_empty() {
+                None
+            } else {
+                Some((yn.clone(), yp.clone()))
+            };
+            let tid = tid.clone();
+            let qid = qid.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Ok(pos) = api_post::<PlanePositions>(
+                    &format!("/api/topics/{tid}/questions/{qid}/positions"),
+                    &SetAxes { x_axis, y_axis },
+                )
+                .await
+                {
+                    set_positions.set(pos);
+                    set_positions_ready.set(true);
+                }
+            });
         });
+        let handle = web_sys::window()
+            .unwrap()
+            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                cb.as_ref().unchecked_ref(),
+                300,
+            )
+            .unwrap_or(0);
+        cb.forget();
+        pos_debounce.set(handle);
     });
 
     // ── WebSocket connection ────────────────────────────────────────
@@ -133,6 +199,59 @@ pub fn OpenQuestionPage(
             {
                 Ok(q) => set_question.set(Some(q)),
                 Err(e) => log!("[add_open_answer] {e}"),
+            }
+        });
+    };
+
+    // Axis send closures
+    let tid_ax = topic_id.clone();
+    let qid_ax = question_id.clone();
+    let send_x = move || {
+        let neg = x_neg.get_untracked();
+        let pos = x_pos.get_untracked();
+        let y = question.get_untracked().and_then(|q| q.y_axis);
+        let x = if neg.trim().is_empty() && pos.trim().is_empty() {
+            None
+        } else {
+            Some((neg, pos))
+        };
+        let tid = tid_ax.clone();
+        let qid = qid_ax.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match api_post::<Question>(
+                &format!("/api/topics/{tid}/questions/{qid}/axes"),
+                &SetAxes { x_axis: x, y_axis: y },
+            )
+            .await
+            {
+                Ok(q) => set_question.set(Some(q)),
+                Err(e) => log!("[set_axes] {e}"),
+            }
+        });
+    };
+
+    let tid_ax2 = topic_id.clone();
+    let qid_ax2 = question_id.clone();
+    let send_y = move || {
+        let neg = y_neg.get_untracked();
+        let pos = y_pos.get_untracked();
+        let x = question.get_untracked().and_then(|q| q.x_axis);
+        let y = if neg.trim().is_empty() && pos.trim().is_empty() {
+            None
+        } else {
+            Some((neg, pos))
+        };
+        let tid = tid_ax2.clone();
+        let qid = qid_ax2.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match api_post::<Question>(
+                &format!("/api/topics/{tid}/questions/{qid}/axes"),
+                &SetAxes { x_axis: x, y_axis: y },
+            )
+            .await
+            {
+                Ok(q) => set_question.set(Some(q)),
+                Err(e) => log!("[set_axes] {e}"),
             }
         });
     };
@@ -197,6 +316,41 @@ pub fn OpenQuestionPage(
                         }
                     }).collect::<Vec<_>>()
                 }}
+            </div>
+
+            <div class="axis-controls">
+                <div class="axis-row">
+                    <span class="axis-label">"x"</span>
+                    <input
+                        class="axis-input"
+                        placeholder="negative..."
+                        prop:value=x_neg
+                        on:input=move |ev| set_x_neg.set(event_target_value(&ev))
+                    />
+                    <input
+                        class="axis-input"
+                        placeholder="positive..."
+                        prop:value=x_pos
+                        on:input=move |ev| set_x_pos.set(event_target_value(&ev))
+                    />
+                    <button class="axis-send-btn" on:click=move |_| send_x()>"Send"</button>
+                </div>
+                <div class="axis-row">
+                    <span class="axis-label">"y"</span>
+                    <input
+                        class="axis-input"
+                        placeholder="negative..."
+                        prop:value=y_neg
+                        on:input=move |ev| set_y_neg.set(event_target_value(&ev))
+                    />
+                    <input
+                        class="axis-input"
+                        placeholder="positive..."
+                        prop:value=y_pos
+                        on:input=move |ev| set_y_pos.set(event_target_value(&ev))
+                    />
+                    <button class="axis-send-btn" on:click=move |_| send_y()>"Send"</button>
+                </div>
             </div>
 
             <div class="open-answer-form">

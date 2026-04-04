@@ -3,7 +3,7 @@ use actix_web::{App, HttpResponse, HttpServer, middleware, web};
 use futures_util::StreamExt as _;
 use mace_reforge_shared::{
     AddAnswer, AddOpenAnswer, CastVote, CreateQuestion, CreateTopic, DeleteAnswer, EditAnswer,
-    PlanePoint, PlanePositions, Question, Topic, TopicWithCount, User, Vote, WsMsg,
+    PlanePoint, PlanePositions, Question, SetAxes, Topic, TopicWithCount, User, Vote, WsMsg,
 };
 use std::collections::HashMap;
 use std::net::TcpListener;
@@ -152,6 +152,8 @@ async fn create_question(
             answers: vec![],
             votes: vec![],
             open_answers: vec![],
+            x_axis: None,
+            y_axis: None,
         };
         let resp = HttpResponse::Ok().json(&question);
         db.questions.push(question);
@@ -334,15 +336,48 @@ async fn add_open_answer(
     HttpResponse::Ok().json(q)
 }
 
+// ── Axes (custom projection) ────────────────────────────────────────
+
+async fn set_axes(
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+    body: web::Json<SetAxes>,
+) -> HttpResponse {
+    let (_topic_id, question_id) = path.into_inner();
+    let qid = question_id.clone();
+    let result = state.with_db_save(|db| {
+        let Some(q) = db.questions.iter_mut().find(|q| q.id == qid) else {
+            return None;
+        };
+        q.x_axis = body.x_axis.clone();
+        q.y_axis = body.y_axis.clone();
+        Some(q.clone())
+    });
+    match result {
+        Some(q) => {
+            if let Ok(msg) =
+                serde_json::to_string(&WsMsg::QuestionUpdated { question: q.clone() })
+            {
+                state.broadcast(&question_id, &msg);
+            }
+            HttpResponse::Ok().json(q)
+        }
+        None => HttpResponse::NotFound().finish(),
+    }
+}
+
 // ── Positions (PCA projection) ──────────────────────────────────────
 
 async fn get_positions(
     state: web::Data<AppState>,
     path: web::Path<(String, String)>,
+    body: web::Json<SetAxes>,
 ) -> HttpResponse {
     let (_topic_id, question_id) = path.into_inner();
+    let x_axis = &body.x_axis;
+    let y_axis = &body.y_axis;
 
-    // Collect answers (user_name, text)
+    // Collect answers
     let answers: Vec<(String, String)> = state.with_db(|db| {
         db.questions
             .iter()
@@ -376,6 +411,29 @@ async fn get_positions(
         }
     }
 
+    // Embed axis texts if custom axes are provided
+    // Cache key includes the text so different axis values get different embeddings
+    let axis_cache_key = |text: &str| format!("__axis:{text}__");
+    if let (Some(xa), Some(ya)) = (x_axis, y_axis) {
+        let axis_texts = [&xa.0, &xa.1, &ya.0, &ya.1];
+        let missing: Vec<String> = {
+            let cache = state.embeddings.lock().unwrap();
+            axis_texts
+                .iter()
+                .filter(|t| !cache.contains_key(&(question_id.clone(), axis_cache_key(t))))
+                .map(|t| t.to_string())
+                .collect()
+        };
+        if !missing.is_empty() {
+            if let Some(embs) = call_embed_batch(&missing).await {
+                let mut cache = state.embeddings.lock().unwrap();
+                for (text, emb) in missing.iter().zip(embs) {
+                    cache.insert((question_id.clone(), axis_cache_key(text)), emb);
+                }
+            }
+        }
+    }
+
     let cache = state.embeddings.lock().unwrap();
     let user_names: Vec<String> = answers.iter().map(|(n, _)| n.clone()).collect();
     let embeddings: Vec<Option<&Vec<f64>>> = user_names
@@ -383,7 +441,18 @@ async fn get_positions(
         .map(|name| cache.get(&(question_id.clone(), name.clone())))
         .collect();
 
-    let positions = pca_project(&user_names, &embeddings);
+    let positions = if let (Some(xa), Some(ya)) = (x_axis, y_axis) {
+        let get = |text: &str| cache.get(&(question_id.clone(), axis_cache_key(text)));
+        match (get(&xa.0), get(&xa.1), get(&ya.0), get(&ya.1)) {
+            (Some(xn), Some(xp), Some(yn), Some(yp)) => {
+                custom_project(&user_names, &embeddings, xn, xp, yn, yp)
+            }
+            _ => pca_project(&user_names, &embeddings),
+        }
+    } else {
+        pca_project(&user_names, &embeddings)
+    };
+
     HttpResponse::Ok().json(positions)
 }
 
@@ -465,6 +534,74 @@ async fn embedding_proxy(
             HttpResponse::ServiceUnavailable().body("embedding service unavailable")
         }
     }
+}
+
+// ── Custom axis projection ──────────────────────────────────────────
+
+fn custom_project(
+    user_names: &[String],
+    embeddings: &[Option<&Vec<f64>>],
+    x_neg: &[f64],
+    x_pos: &[f64],
+    y_neg: &[f64],
+    y_pos: &[f64],
+) -> PlanePositions {
+    // Direction vectors
+    let x_dir: Vec<f64> = x_pos.iter().zip(x_neg).map(|(p, n)| p - n).collect();
+    let y_dir: Vec<f64> = y_pos.iter().zip(y_neg).map(|(p, n)| p - n).collect();
+
+    // Normalize
+    let norm = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>().sqrt().max(1e-12);
+    let nx = norm(&x_dir);
+    let ny = norm(&y_dir);
+    let x_dir: Vec<f64> = x_dir.iter().map(|v| v / nx).collect();
+    let y_dir: Vec<f64> = y_dir.iter().map(|v| v / ny).collect();
+
+    // Collect valid embeddings
+    let valid: Vec<(usize, &Vec<f64>)> = embeddings
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| e.map(|v| (i, v)))
+        .filter(|(_, v)| !v.is_empty())
+        .collect();
+
+    let mut result: Vec<PlanePoint> = user_names
+        .iter()
+        .map(|name| PlanePoint {
+            user_name: name.clone(),
+            x: 0.5,
+            y: 0.5,
+        })
+        .collect();
+
+    if valid.is_empty() {
+        return PlanePositions { points: result };
+    }
+
+    // Project onto axes
+    let dot = |a: &[f64], b: &[f64]| -> f64 { a.iter().zip(b).map(|(x, y)| x * y).sum() };
+    let proj: Vec<(f64, f64)> = valid
+        .iter()
+        .map(|(_, emb)| (dot(emb, &x_dir), dot(emb, &y_dir)))
+        .collect();
+
+    // Normalize to [margin, 1-margin]
+    let margin = 0.1;
+    let range = 1.0 - 2.0 * margin;
+    let min_x = proj.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+    let max_x = proj.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+    let min_y = proj.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+    let max_y = proj.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+    let span_x = (max_x - min_x).max(1e-12);
+    let span_y = (max_y - min_y).max(1e-12);
+
+    for (k, (orig_i, _)) in valid.iter().enumerate() {
+        result[*orig_i].x = margin + (proj[k].0 - min_x) / span_x * range;
+        // Invert Y so positive is at the top (low CSS top%)
+        result[*orig_i].y = 1.0 - (margin + (proj[k].1 - min_y) / span_y * range);
+    }
+
+    PlanePositions { points: result }
 }
 
 // ── PCA ─────────────────────────────────────────────────────────────
@@ -809,10 +946,15 @@ async fn main() -> std::io::Result<()> {
                 "/api/topics/{topic_id}/questions/{question_id}/open-answers",
                 web::post().to(add_open_answer),
             )
-            // Positions (PCA projection)
+            // Axes (custom projection)
+            .route(
+                "/api/topics/{topic_id}/questions/{question_id}/axes",
+                web::post().to(set_axes),
+            )
+            // Positions (projection)
             .route(
                 "/api/topics/{topic_id}/questions/{question_id}/positions",
-                web::get().to(get_positions),
+                web::post().to(get_positions),
             )
             // Users
             .route("/api/users", web::get().to(get_users))

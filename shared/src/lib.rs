@@ -25,6 +25,11 @@ pub struct Question {
     /// Open question: free-text answers
     #[serde(default)]
     pub open_answers: Vec<OpenAnswer>,
+    /// Custom projection axes: (negative_text, positive_text)
+    #[serde(default)]
+    pub x_axis: Option<(String, String)>,
+    #[serde(default)]
+    pub y_axis: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +128,12 @@ pub struct CastVote {
 pub struct AddOpenAnswer {
     pub user_name: String,
     pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetAxes {
+    pub x_axis: Option<(String, String)>,
+    pub y_axis: Option<(String, String)>,
 }
 
 /// 2D positions for open question answers, returned by the server
