@@ -97,5 +97,8 @@ fn App() -> impl IntoView {
                 Route::Question(tid, qid) => view! { <QuestionPage topic_id=tid question_id=qid current_user=current_user/> }.into_any(),
             }}
         </main>
+        <footer class="site-footer">
+            "Created by Mario Geiger as a personal initiative, independent of and unaffiliated with NVIDIA."
+        </footer>
     }
 }
