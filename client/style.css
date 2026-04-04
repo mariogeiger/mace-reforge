@@ -27,6 +27,17 @@ html, body {
     -webkit-tap-highlight-color: transparent;
 }
 
+body {
+    display: flex;
+    flex-direction: column;
+}
+
+main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
 a {
     color: var(--brown);
     text-decoration: none;
@@ -241,6 +252,15 @@ a {
 
 .user-save-btn:hover {
     background: var(--brown-dark);
+}
+
+/* ── Footer ──────────────────────────────────────────────────────── */
+
+.site-footer {
+    text-align: center;
+    padding: 2rem 1rem;
+    font-size: 0.75rem;
+    color: #d5d0c4;
 }
 
 /* ── Pages ───────────────────────────────────────────────────────── */
@@ -662,35 +682,32 @@ h2 {
 /* ── Open Question: 2D Plane ─────────────────────────────────────── */
 
 .open-question-page {
-    max-width: 1000px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    flex: 1;
+    padding: 2rem;
+}
+
+.open-question-page .back-link {
+    align-self: flex-start;
+}
+
+.open-plane {
+    position: relative;
+    width: 100%;
+    flex: 1;
+    min-height: 300px;
+    overflow: visible;
 }
 
 .open-answer-form {
     display: flex;
-    gap: 0.75rem;
-    margin-bottom: 1.5rem;
+    flex-direction: column;
+    margin-top: 1.5rem;
     width: 100%;
     max-width: 600px;
-}
-
-.textarea-wrap {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-}
-
-.token-counter {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-    text-align: right;
-    min-height: 1.2em;
-    padding: 0.15rem 0.25rem;
-    transition: color 0.15s;
-}
-
-.token-counter.over-limit {
-    color: #c0392b;
-    font-weight: 600;
 }
 
 .open-answer-form textarea {
@@ -717,32 +734,18 @@ h2 {
     color: var(--text-muted);
 }
 
-.open-answer-form button {
-    padding: 0.65rem 1.5rem;
-    border: none;
-    border-radius: var(--radius);
-    background: var(--brown);
-    color: var(--bg);
-    font-size: 0.95rem;
+.token-counter {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-align: right;
+    min-height: 1.2em;
+    padding: 0.15rem 0.25rem;
+    transition: color 0.15s;
+}
+
+.token-counter.over-limit {
+    color: #c0392b;
     font-weight: 600;
-    cursor: pointer;
-    align-self: flex-end;
-    transition: background 0.15s;
-}
-
-.open-answer-form button:hover {
-    background: var(--brown-dark);
-}
-
-.open-plane {
-    position: relative;
-    width: 100%;
-    aspect-ratio: 4 / 3;
-    max-height: 500px;
-    border: 2px solid var(--brown-border);
-    border-radius: var(--radius);
-    background: var(--brown-faint);
-    overflow: visible;
 }
 
 .plane-empty-text {

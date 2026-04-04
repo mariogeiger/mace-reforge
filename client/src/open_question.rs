@@ -147,66 +147,9 @@ pub fn OpenQuestionPage(
     let tid2 = topic_id.clone();
 
     view! {
-        <div class="page question-page open-question-page">
+        <div class="open-question-page">
             <a href=format!("#/topic/{tid2}") class="back-link">"Return to questions"</a>
             <h2 class="question-title">{move || question.get().map(|q| q.text).unwrap_or_default()}</h2>
-
-            <div class="open-answer-form">
-                <div class="textarea-wrap">
-                    <textarea
-                        placeholder="Speak thy mind upon this matter..."
-                        prop:value=my_text
-                        on:input=move |ev| {
-                            let val = event_target_value(&ev);
-                            set_my_text.set(val.clone());
-                            // Debounce: tokenize + submit
-                            let prev = debounce_handle.get();
-                            if prev != 0 {
-                                web_sys::window().unwrap().clear_timeout_with_handle(prev);
-                            }
-                            if val.trim().is_empty() {
-                                set_token_count.set(Some(0));
-                                debounce_handle.set(0);
-                                return;
-                            }
-                            let submit = submit_debounced.clone();
-                            let cb = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
-                                let val = val.clone();
-                                // Tokenize
-                                {
-                                    let val = val.clone();
-                                    wasm_bindgen_futures::spawn_local(async move {
-                                        #[derive(serde::Deserialize)]
-                                        struct TokenResp { num_tokens: usize }
-                                        #[derive(serde::Serialize)]
-                                        struct TokenReq { text: String }
-                                        if let Ok(resp) = api_post::<TokenResp>(
-                                            "/embedding/tokenize",
-                                            &TokenReq { text: val },
-                                        ).await {
-                                            set_token_count.set(Some(resp.num_tokens));
-                                        }
-                                    });
-                                }
-                                // Submit
-                                submit(val);
-                            });
-                            let handle = web_sys::window().unwrap()
-                                .set_timeout_with_callback_and_timeout_and_arguments_0(
-                                    cb.as_ref().unchecked_ref(), 500
-                                ).unwrap_or(0);
-                            cb.forget();
-                            debounce_handle.set(handle);
-                        }
-                    />
-                    <div class="token-counter" class:over-limit=move || token_count.get().map(|n| n > 128).unwrap_or(false)>
-                        {move || match token_count.get() {
-                            Some(n) => format!("{n}/128 tokens"),
-                            None => "0/128 tokens".to_string(),
-                        }}
-                    </div>
-                </div>
-            </div>
 
             <div class="open-plane">
                 <div class="plane-empty-text">
@@ -254,6 +197,61 @@ pub fn OpenQuestionPage(
                         }
                     }).collect::<Vec<_>>()
                 }}
+            </div>
+
+            <div class="open-answer-form">
+                <textarea
+                    placeholder="Speak thy mind upon this matter..."
+                    prop:value=my_text
+                    on:input=move |ev| {
+                        let val = event_target_value(&ev);
+                        set_my_text.set(val.clone());
+                        // Debounce: tokenize + submit
+                        let prev = debounce_handle.get();
+                        if prev != 0 {
+                            web_sys::window().unwrap().clear_timeout_with_handle(prev);
+                        }
+                        if val.trim().is_empty() {
+                            set_token_count.set(Some(0));
+                            debounce_handle.set(0);
+                            return;
+                        }
+                        let submit = submit_debounced.clone();
+                        let cb = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+                            let val = val.clone();
+                            // Tokenize
+                            {
+                                let val = val.clone();
+                                wasm_bindgen_futures::spawn_local(async move {
+                                    #[derive(serde::Deserialize)]
+                                    struct TokenResp { num_tokens: usize }
+                                    #[derive(serde::Serialize)]
+                                    struct TokenReq { text: String }
+                                    if let Ok(resp) = api_post::<TokenResp>(
+                                        "/embedding/tokenize",
+                                        &TokenReq { text: val },
+                                    ).await {
+                                        set_token_count.set(Some(resp.num_tokens));
+                                    }
+                                });
+                            }
+                            // Submit
+                            submit(val);
+                        });
+                        let handle = web_sys::window().unwrap()
+                            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                                cb.as_ref().unchecked_ref(), 500
+                            ).unwrap_or(0);
+                        cb.forget();
+                        debounce_handle.set(handle);
+                    }
+                />
+                <div class="token-counter" class:over-limit=move || token_count.get().map(|n| n > 128).unwrap_or(false)>
+                    {move || match token_count.get() {
+                        Some(n) => format!("{n}/128 tokens"),
+                        None => "0/128 tokens".to_string(),
+                    }}
+                </div>
             </div>
         </div>
     }
