@@ -1,6 +1,6 @@
 # Embedding Service
 
-Text embedding service using GTR-T5-base (768-dim embeddings).
+Text embedding service using BGE-large-en-v1.5 (1024-dim embeddings).
 
 Models are loaded lazily on first request and unloaded after 1 hour of inactivity to free GPU memory.
 
@@ -35,7 +35,7 @@ curl -X POST http://127.0.0.1:4850/embed \
 { "embeddings": [[0.15, 0.09, ...], [0.06, 0.07, ...]] }
 ```
 
-Each embedding is a 768-dim float vector. Latency: ~5ms per text.
+Each embedding is a 1024-dim float vector. Latency: ~5ms per text.
 
 ### `POST /tokenize`
 
@@ -49,7 +49,7 @@ curl -X POST http://127.0.0.1:4850/tokenize \
 { "num_tokens": 3 }
 ```
 
-The embedding model truncates at 128 tokens (~80 words).
+The embedding model truncates at 512 tokens (~350 words).
 
 ## Systemd
 

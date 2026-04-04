@@ -1,5 +1,5 @@
 """
-Embedding service using GTR-T5-base (768-dim embeddings).
+Embedding service using BGE-large-en-v1.5 (1024-dim embeddings).
 
 Endpoints:
   POST /embed     { "texts": ["..."] }   → { "embeddings": [[...], ...] }
@@ -25,6 +25,7 @@ from pydantic import BaseModel
 # Config
 # ---------------------------------------------------------------------------
 
+MODEL_NAME = "BAAI/bge-large-en-v1.5"
 IDLE_TIMEOUT_S = 3600  # 1 hour
 WATCHDOG_INTERVAL_S = 15
 PORT = 4850
@@ -37,40 +38,27 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 # ---------------------------------------------------------------------------
 
 
-def _mean_pool(hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-    """Mean pooling over non-padded tokens."""
-    mask = attention_mask.unsqueeze(-1).float()
-    return (hidden_state * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-9)
-
-
 class ModelHolder:
     def __init__(self):
         self._lock = threading.Lock()
-        self._encoder = None
-        self._tokenizer = None
+        self._model = None
         self._last_used: float = 0.0
 
     @property
     def loaded(self) -> bool:
-        return self._encoder is not None
+        return self._model is not None
 
     def _load(self):
-        from transformers import AutoModel, AutoTokenizer
+        from sentence_transformers import SentenceTransformer
 
-        logger.info("Loading models into GPU memory...")
+        logger.info(f"Loading {MODEL_NAME} into GPU memory...")
         t0 = time.monotonic()
-        self._encoder = AutoModel.from_pretrained(
-            "sentence-transformers/gtr-t5-base"
-        ).encoder.to("cuda")
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            "sentence-transformers/gtr-t5-base"
-        )
-        logger.info(f"Models loaded in {time.monotonic() - t0:.1f}s")
+        self._model = SentenceTransformer(MODEL_NAME, device="cuda")
+        logger.info(f"Model loaded in {time.monotonic() - t0:.1f}s")
 
     def _unload(self):
-        logger.info("Unloading models from GPU memory...")
-        self._encoder = None
-        self._tokenizer = None
+        logger.info("Unloading model from GPU memory...")
+        self._model = None
         torch.cuda.empty_cache()
         logger.info("GPU memory freed")
 
@@ -87,23 +75,11 @@ class ModelHolder:
 
     def embed(self, texts: list[str]) -> torch.Tensor:
         self.ensure_loaded()
-        inputs = self._tokenizer(
-            texts,
-            return_tensors="pt",
-            max_length=128,
-            truncation=True,
-            padding="max_length",
-        ).to("cuda")
-        with torch.no_grad():
-            out = self._encoder(
-                input_ids=inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-            )
-            return _mean_pool(out.last_hidden_state, inputs["attention_mask"])
+        return self._model.encode(texts, convert_to_tensor=True)
 
     def tokenize_count(self, text: str) -> int:
         self.ensure_loaded()
-        return len(self._tokenizer(text, truncation=False)["input_ids"])
+        return len(self._model.tokenizer(text, truncation=False)["input_ids"])
 
 
 models = ModelHolder()
@@ -187,7 +163,9 @@ async def embed(req: EmbedRequest):
     if not req.texts:
         raise HTTPException(400, "texts must be non-empty")
     embs = models.embed(req.texts)
-    return EmbedResponse(embeddings=embs.cpu().tolist())
+    return EmbedResponse(
+        embeddings=[[round(x, 6) for x in row] for row in embs.cpu().tolist()]
+    )
 
 
 @app.post("/tokenize", response_model=TokenizeResponse)

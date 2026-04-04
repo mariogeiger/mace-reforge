@@ -396,10 +396,10 @@ pub fn OpenQuestionPage(
                         debounce_handle.set(handle);
                     }
                 />
-                <div class="token-counter" class:over-limit=move || token_count.get().map(|n| n > 128).unwrap_or(false)>
+                <div class="token-counter" class:over-limit=move || token_count.get().map(|n| n > 512).unwrap_or(false)>
                     {move || match token_count.get() {
-                        Some(n) => format!("{n}/128 tokens"),
-                        None => "0/128 tokens".to_string(),
+                        Some(n) => format!("{n}/512 tokens"),
+                        None => "0/512 tokens".to_string(),
                     }}
                 </div>
             </div>
