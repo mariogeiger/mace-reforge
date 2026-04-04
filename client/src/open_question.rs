@@ -303,13 +303,9 @@ pub fn OpenQuestionPage(
                                 style:left=format!("{x_pct}%")
                                 style:top=format!("{y_pct}%")
                             >
+                                <div class="plane-excerpt">{answer_text}</div>
                                 <div class="plane-avatar">
                                     {shape_svg(shape, color, 32.0)}
-                                    <div class="plane-tooltip">
-                                        <strong>{user_name.clone()}</strong>
-                                        <br/>
-                                        {answer_text}
-                                    </div>
                                 </div>
                                 <span class="plane-name">{user_name}</span>
                             </div>
