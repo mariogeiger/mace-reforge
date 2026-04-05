@@ -8,12 +8,30 @@ use crate::shapes::shape_svg;
 
 // ── Geometry ────────────────────────────────────────────────────────
 
-/// Answers and vote avatars sit at this % of circle-element width from center.
-const R: f64 = 43.0;
-/// Labels sit on the edge of the container (outside the circle).
-const LABEL_R: f64 = 50.0;
+/// All radii are in **circle-radii**: 1.0 = the visible circle's edge.
+
+/// Answer dots on the rim.
+const DOT_R: f64 = 1.0;
+/// Labels and add-buttons just outside the circle.
+const LABEL_R: f64 = 1.06;
 /// Pixel radius for avatar hit-testing on pointer down.
 const HIT_PX: f64 = 24.0;
+
+// ── CSS conversion (derived from stylesheet, not configuration) ──────
+
+/// .vote-circle is inset this % from .vote-circle-container on each side.
+const INSET_PCT: f64 = 7.0;
+
+/// Circle-radii → CSS % within .vote-circle (children of the circle element).
+fn pct_circle(r: f64, angle: f64) -> (f64, f64) {
+    (50.0 + r * 50.0 * angle.cos(), 50.0 + r * 50.0 * angle.sin())
+}
+
+/// Circle-radii → CSS % within .vote-circle-container (children of the outer box).
+fn pct_container(r: f64, angle: f64) -> (f64, f64) {
+    let s = 50.0 - INSET_PCT; // 1 circle-radius in container-%
+    (50.0 + r * s * angle.cos(), 50.0 + r * s * angle.sin())
+}
 
 fn answer_angle(i: usize, n: usize) -> f64 {
     -FRAC_PI_2 + TAU * (i as f64) / (n as f64)
@@ -29,7 +47,7 @@ fn circle_metrics(el: &web_sys::Element) -> (f64, f64, f64) {
     (
         r.left() + r.width() / 2.0,
         r.top() + r.height() / 2.0,
-        r.width() * R / 100.0,
+        r.width() / 2.0, // circle radius in pixels
     )
 }
 
@@ -416,7 +434,7 @@ pub fn ClosedQuestionPage(
                     let n = q.answers.len();
                     q.answers.iter().enumerate().map(|(i, ans)| {
                         let a = answer_angle(i, n);
-                        let (lx, ly) = (50.0 + LABEL_R * a.cos(), 50.0 + LABEL_R * a.sin());
+                        let (lx, ly) = pct_container(LABEL_R, a);
                         let align = label_align(a);
                         let do_edit = do_edit.clone();
                         let do_delete = do_delete.clone();
@@ -450,7 +468,7 @@ pub fn ClosedQuestionPage(
                         } else {
                             answer_angle(i, n) + TAU / (2 * n) as f64
                         };
-                        let (bx, by) = (50.0 + LABEL_R * a.cos(), 50.0 + LABEL_R * a.sin());
+                        let (bx, by) = pct_container(LABEL_R, a);
                         let idx = if n == 0 { 0 } else { (i + 1) % n };
                         let do_add = do_add.clone();
                         view! {
@@ -474,7 +492,7 @@ pub fn ClosedQuestionPage(
                         let n = q.answers.len();
                         (0..n).map(|i| {
                             let a = answer_angle(i, n);
-                            let (dx, dy) = (50.0 + R * a.cos(), 50.0 + R * a.sin());
+                            let (dx, dy) = pct_circle(DOT_R, a);
                             view! {
                                 <div class="answer-dot"
                                     style:left=format!("{dx}%") style:top=format!("{dy}%") />
@@ -493,8 +511,8 @@ pub fn ClosedQuestionPage(
                                 .unwrap_or((Shape::Circle, "#808080".into()));
                             view! {
                                 <div class="vote-avatar"
-                                    style:left=format!("{}%", 50.0 + v.x * R)
-                                    style:top=format!("{}%", 50.0 + v.y * R)
+                                    style:left=format!("{}%", 50.0 + v.x * 50.0)
+                                    style:top=format!("{}%", 50.0 + v.y * 50.0)
                                     title=v.user_name.clone()>
                                     {shape_svg(shape, color, 26.0)}
                                 </div>
@@ -508,8 +526,8 @@ pub fn ClosedQuestionPage(
                         Some(view! {
                             <div class="vote-avatar vote-avatar-me"
                                 class:dragging=dragging
-                                style:left=format!("{}%", 50.0 + knob_x.get() * R)
-                                style:top=format!("{}%", 50.0 + knob_y.get() * R)>
+                                style:left=format!("{}%", 50.0 + knob_x.get() * 50.0)
+                                style:top=format!("{}%", 50.0 + knob_y.get() * 50.0)>
                                 {shape_svg(u.shape, u.color, 32.0)}
                             </div>
                         })
