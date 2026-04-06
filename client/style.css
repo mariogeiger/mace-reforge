@@ -672,10 +672,17 @@ h2 {
     width: 26px;
     height: 26px;
     display: block;
-    filter:
-        drop-shadow(1px 0 0 white) drop-shadow(-1px 0 0 white)
-        drop-shadow(0 1px 0 white) drop-shadow(0 -1px 0 white)
-        drop-shadow(0 1px 3px rgba(0, 0, 0, 0.2));
+    filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.2));
+}
+
+.vote-avatar svg circle,
+.vote-avatar svg rect,
+.vote-avatar svg polygon,
+.vote-avatar svg path {
+    stroke: #EDE8DB;
+    stroke-width: 3;
+    stroke-linejoin: round;
+    paint-order: stroke fill;
 }
 
 .vote-avatar-me {
@@ -690,10 +697,14 @@ h2 {
 .vote-avatar-me svg {
     width: 32px;
     height: 32px;
-    filter:
-        drop-shadow(2px 0 0 white) drop-shadow(-2px 0 0 white)
-        drop-shadow(0 2px 0 white) drop-shadow(0 -2px 0 white)
-        drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+    filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+}
+
+.vote-avatar-me svg circle,
+.vote-avatar-me svg rect,
+.vote-avatar-me svg polygon,
+.vote-avatar-me svg path {
+    stroke-width: 4;
 }
 
 .vote-avatar-me.dragging {
@@ -702,9 +713,17 @@ h2 {
 
 .vote-avatar-me.dragging svg {
     transform: scale(1.15);
-    filter:
-        drop-shadow(1px 0 0 white) drop-shadow(-1px 0 0 white)
-        drop-shadow(0 1px 0 white) drop-shadow(0 -1px 0 white);
+    filter: none;
+}
+
+.avatar-name {
+    display: block;
+    text-align: center;
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    margin-top: 1px;
+    pointer-events: none;
 }
 
 /* ── Open Question: 2D Plane ─────────────────────────────────────── */

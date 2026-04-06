@@ -509,12 +509,14 @@ pub fn ClosedQuestionPage(
                                 .find(|u| u.name == v.user_name)
                                 .map(|u| (u.shape, u.color))
                                 .unwrap_or((Shape::Circle, "#808080".into()));
+                            let name = v.user_name.clone();
                             view! {
                                 <div class="vote-avatar"
                                     style:left=format!("{}%", 50.0 + v.x * 50.0)
                                     style:top=format!("{}%", 50.0 + v.y * 50.0)
-                                    title=v.user_name.clone()>
+                                    title=name.clone()>
                                     {shape_svg(shape, color, 26.0)}
+                                    <span class="avatar-name">{name.clone()}</span>
                                 </div>
                             }
                         }).collect::<Vec<_>>()
@@ -523,12 +525,14 @@ pub fn ClosedQuestionPage(
                     // Current user's draggable avatar
                     {move || {
                         let u = current_user.get()?;
+                        let name = u.name.clone();
                         Some(view! {
                             <div class="vote-avatar vote-avatar-me"
                                 class:dragging=dragging
                                 style:left=format!("{}%", 50.0 + knob_x.get() * 50.0)
                                 style:top=format!("{}%", 50.0 + knob_y.get() * 50.0)>
                                 {shape_svg(u.shape, u.color, 32.0)}
+                                <span class="avatar-name">{name}</span>
                             </div>
                         })
                     }}
