@@ -40,6 +40,27 @@ pub async fn api_get<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, Str
     serde_json::from_value(json).map_err(|e| e.to_string())
 }
 
+pub async fn api_delete(url: &str) -> Result<(), String> {
+    let opts = web_sys::RequestInit::new();
+    opts.set_method("DELETE");
+    let window = web_sys::window().unwrap();
+    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init(url, &opts))
+        .await
+        .map_err(|e| format!("{e:?}"))?
+        .dyn_into()
+        .map_err(|e| format!("{e:?}"))?;
+    let status = resp.status();
+    if status >= 400 {
+        let text = JsFuture::from(resp.text().map_err(|e| format!("{e:?}"))?)
+            .await
+            .map_err(|e| format!("{e:?}"))?
+            .as_string()
+            .unwrap_or_default();
+        return Err(format!("HTTP {status}: {text}"));
+    }
+    Ok(())
+}
+
 pub async fn api_post<T: serde::de::DeserializeOwned>(
     url: &str,
     body: &impl serde::Serialize,

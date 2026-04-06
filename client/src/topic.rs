@@ -7,7 +7,6 @@ use crate::api::*;
 pub fn TopicPage(topic_id: String) -> impl IntoView {
     let (topic, set_topic) = signal(Option::<TopicWithCount>::None);
     let (questions, set_questions) = signal(Vec::<Question>::new());
-    let (new_text, set_new_text) = signal(String::new());
     let tid = topic_id.clone();
     Effect::new(move || {
         let tid = tid.clone();
@@ -23,11 +22,11 @@ pub fn TopicPage(topic_id: String) -> impl IntoView {
 
     let tid2 = topic_id.clone();
     let do_create = move |kind: QuestionKind| {
-        let text = new_text.get_untracked();
-        if text.trim().is_empty() {
-            return;
-        }
-        set_new_text.set(String::new());
+        let window = web_sys::window().unwrap();
+        let text = match window.prompt_with_message("What matter shall be put to question?").ok().flatten() {
+            Some(t) if !t.trim().is_empty() => t,
+            _ => return,
+        };
         let tid = tid2.clone();
         wasm_bindgen_futures::spawn_local(async move {
             match api_post::<Question>(
@@ -42,34 +41,22 @@ pub fn TopicPage(topic_id: String) -> impl IntoView {
         });
     };
 
-    let do_create_k = do_create.clone();
-    let on_keydown = move |ev: web_sys::KeyboardEvent| {
-        if ev.key() == "Enter" {
-            do_create_k(QuestionKind::Closed);
-        }
-    };
-
     let tid3 = topic_id.clone();
 
     view! {
         <div class="page topic-page">
             <a href="#/" class="back-link">"Return to discourses"</a>
-            <h1>{move || topic.get().map(|t| t.title).unwrap_or_default()}</h1>
-            <div class="create-form">
-                <input
-                    type="text"
-                    placeholder="What matter shall be put to question?"
-                    prop:value=new_text
-                    on:input=move |ev| set_new_text.set(event_target_value(&ev))
-                    on:keydown=on_keydown
-                />
-                {
-                    let do_create = do_create.clone();
-                    view! {
-                        <button on:click=move |_| do_create(QuestionKind::Closed)>"Closed"</button>
+            <div class="page-header">
+                <h1>{move || topic.get().map(|t| t.title).unwrap_or_default()}</h1>
+                <div class="add-btn-group">
+                    {
+                        let do_create = do_create.clone();
+                        view! {
+                            <button class="add-btn" on:click=move |_| do_create(QuestionKind::Closed) title="New closed question">"+ Closed"</button>
+                        }
                     }
-                }
-                <button on:click=move |_| do_create(QuestionKind::Open)>"Open"</button>
+                    <button class="add-btn" on:click=move |_| do_create(QuestionKind::Open) title="New open question">"+ Open"</button>
+                </div>
             </div>
             <div class="question-list">
                 <For
@@ -88,12 +75,30 @@ pub fn TopicPage(topic_id: String) -> impl IntoView {
                             format!("{n} positions voiced")
                         };
                         let kind_label = if is_open { "open" } else { "closed" };
+                        let del_tid = tid.clone();
+                        let del_qid = qid.clone();
+                        let do_delete = move |ev: web_sys::MouseEvent| {
+                            ev.prevent_default();
+                            ev.stop_propagation();
+                            let window = web_sys::window().unwrap();
+                            if window.confirm_with_message("Remove this question?").unwrap_or(false) {
+                                let tid = del_tid.clone();
+                                let qid = del_qid.clone();
+                                wasm_bindgen_futures::spawn_local(async move {
+                                    match api_delete(&format!("/api/topics/{tid}/questions/{qid}")).await {
+                                        Ok(()) => set_questions.update(|qs| qs.retain(|q| q.id != qid)),
+                                        Err(e) => log!("[delete_question] {e}"),
+                                    }
+                                });
+                            }
+                        };
                         view! {
                             <a class="question-card" href=format!("#/topic/{tid}/question/{qid}")>
                                 <span class="question-text">{question.text}</span>
                                 <span class="question-meta">
                                     <span class="kind-label">{kind_label}</span>
                                     <span class="answer-count">{subtitle}</span>
+                                    <button class="delete-btn" on:click=do_delete title="Delete question">{"\u{00D7}"}</button>
                                 </span>
                             </a>
                         }

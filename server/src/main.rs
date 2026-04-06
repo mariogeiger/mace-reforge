@@ -112,6 +112,19 @@ async fn create_topic(state: web::Data<AppState>, body: web::Json<CreateTopic>) 
     })
 }
 
+async fn delete_topic(state: web::Data<AppState>, path: web::Path<String>) -> HttpResponse {
+    let topic_id = path.into_inner();
+    state.with_db_save(|db| {
+        let before = db.topics.len();
+        db.topics.retain(|t| t.id != topic_id);
+        if db.topics.len() == before {
+            return HttpResponse::NotFound().finish();
+        }
+        db.questions.retain(|q| q.topic_id != topic_id);
+        HttpResponse::Ok().finish()
+    })
+}
+
 // ── Questions ───────────────────────────────────────────────────────
 
 async fn get_questions(state: web::Data<AppState>, path: web::Path<String>) -> HttpResponse {
@@ -158,6 +171,21 @@ async fn create_question(
         let resp = HttpResponse::Ok().json(&question);
         db.questions.push(question);
         resp
+    })
+}
+
+async fn delete_question(
+    state: web::Data<AppState>,
+    path: web::Path<(String, String)>,
+) -> HttpResponse {
+    let (_topic_id, question_id) = path.into_inner();
+    state.with_db_save(|db| {
+        let before = db.questions.len();
+        db.questions.retain(|q| q.id != question_id);
+        if db.questions.len() == before {
+            return HttpResponse::NotFound().finish();
+        }
+        HttpResponse::Ok().finish()
     })
 }
 
@@ -909,6 +937,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/topics", web::get().to(get_topics))
             .route("/api/topics", web::post().to(create_topic))
             .route("/api/topics/{id}", web::get().to(get_topic))
+            .route("/api/topics/{id}", web::delete().to(delete_topic))
             // Questions
             .route("/api/topics/{id}/questions", web::get().to(get_questions))
             .route(
@@ -918,6 +947,10 @@ async fn main() -> std::io::Result<()> {
             .route(
                 "/api/topics/{topic_id}/questions/{question_id}",
                 web::get().to(get_question),
+            )
+            .route(
+                "/api/topics/{topic_id}/questions/{question_id}",
+                web::delete().to(delete_question),
             )
             // Answers (closed)
             .route(

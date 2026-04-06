@@ -7,7 +7,6 @@ use crate::Star;
 #[component]
 pub fn HomePage() -> impl IntoView {
     let (topics, set_topics) = signal(Vec::<TopicWithCount>::new());
-    let (new_title, set_new_title) = signal(String::new());
     let (error, set_error) = signal(Option::<String>::None);
 
     Effect::new(move || {
@@ -22,12 +21,12 @@ pub fn HomePage() -> impl IntoView {
         });
     });
 
-    let do_create = move || {
-        let title = new_title.get_untracked();
-        if title.trim().is_empty() {
-            return;
-        }
-        set_new_title.set(String::new());
+    let do_create = move |_: web_sys::MouseEvent| {
+        let window = web_sys::window().unwrap();
+        let title = match window.prompt_with_message("Name thy discourse:").ok().flatten() {
+            Some(t) if !t.trim().is_empty() => t,
+            _ => return,
+        };
         wasm_bindgen_futures::spawn_local(async move {
             match api_post::<TopicWithCount>("/api/topics", &CreateTopic { title }).await {
                 Ok(topic) => set_topics.update(|t| t.push(topic)),
@@ -39,28 +38,11 @@ pub fn HomePage() -> impl IntoView {
         });
     };
 
-    let on_keydown = move |ev: web_sys::KeyboardEvent| {
-        if ev.key() == "Enter" {
-            do_create();
-        }
-    };
-
-    let on_click = move |_: web_sys::MouseEvent| {
-        do_create();
-    };
-
     view! {
         <div class="page home-page">
-            <h1>"Discourses"</h1>
-            <div class="create-form">
-                <input
-                    type="text"
-                    placeholder="Name thy discourse..."
-                    prop:value=new_title
-                    on:input=move |ev| set_new_title.set(event_target_value(&ev))
-                    on:keydown=on_keydown
-                />
-                <button on:click=on_click>"Establish"</button>
+            <div class="page-header">
+                <h1>"Discourses"</h1>
+                <button class="add-btn" on:click=do_create title="New discourse">"+"</button>
             </div>
             <Show when=move || error.get().is_some()>
                 <p class="error">{move || error.get().unwrap_or_default()}</p>
@@ -71,11 +53,33 @@ pub fn HomePage() -> impl IntoView {
                     key=|t| t.id.clone()
                     let:topic
                 >
-                    <a class="topic-card" href=format!("#/topic/{}", topic.id)>
-                        <Star class_name="card-star"/>
-                        <span class="card-title">{topic.title}</span>
-                        <span class="card-count">{topic.question_count}" questions within"</span>
-                    </a>
+                    {
+                        let tid = topic.id.clone();
+                        let set_topics = set_topics.clone();
+                        let do_delete = move |ev: web_sys::MouseEvent| {
+                            ev.prevent_default();
+                            ev.stop_propagation();
+                            let window = web_sys::window().unwrap();
+                            if window.confirm_with_message("Remove this discourse and all its questions?").unwrap_or(false) {
+                                let tid = tid.clone();
+                                let set_topics = set_topics.clone();
+                                wasm_bindgen_futures::spawn_local(async move {
+                                    match api_delete(&format!("/api/topics/{tid}")).await {
+                                        Ok(()) => set_topics.update(|t| t.retain(|topic| topic.id != tid)),
+                                        Err(e) => log!("[delete_topic] {e}"),
+                                    }
+                                });
+                            }
+                        };
+                        view! {
+                            <a class="topic-card" href=format!("#/topic/{}", topic.id)>
+                                <Star class_name="card-star"/>
+                                <span class="card-title">{topic.title.clone()}</span>
+                                <span class="card-count">{topic.question_count}" questions within"</span>
+                                <button class="delete-btn" on:click=do_delete title="Delete discourse">{"\u{00D7}"}</button>
+                            </a>
+                        }
+                    }
                 </For>
             </div>
         </div>

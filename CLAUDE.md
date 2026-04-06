@@ -42,7 +42,5 @@ Maximize **power/complexity ratio** — use cases handled per branch in the code
 ## Build & Deploy
 
 ```bash
-cargo build --release -p mace-reforge-server && \
-trunk build --release --config client/Trunk.toml && \
-systemctl --user restart mace-reforge.service
+cargo build --release -p mace-reforge-server && trunk build --release --config client/Trunk.toml && systemctl --user restart mace-reforge.service
 ```
